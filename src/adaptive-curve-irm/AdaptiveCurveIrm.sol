@@ -8,7 +8,6 @@ import {UtilsLib} from "./libraries/UtilsLib.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
 import {ExpLib} from "./libraries/ExpLib.sol";
 import {MathLib, WAD_INT as WAD} from "./libraries/MathLib.sol";
-import {ConstantsLib} from "./libraries/ConstantsLib.sol";
 import {MarketParamsLib} from "../../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
 import {Id, MarketParams, Market} from "../../lib/morpho-blue/src/interfaces/IMorpho.sol";
 import {MathLib as MorphoMathLib} from "../../lib/morpho-blue/src/libraries/MathLib.sol";
@@ -27,10 +26,44 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     /// @notice Emitted when a borrow rate is updated.
     event BorrowRateUpdate(Id indexed id, uint256 avgBorrowRate, uint256 rateAtTarget);
 
+    /* STRUCTS */
+
+    /// @notice Curve parameters passed at construction and frozen into immutables.
+    struct Config {
+        int256 curveSteepness; // WAD, >= 1e18
+        int256 adjustmentSpeed; // WAD per second, >= 0
+        int256 targetUtilization; // WAD, in (0, 1e18)
+        int256 initialRateAtTarget; // WAD per second, in [minRateAtTarget, maxRateAtTarget]
+        int256 minRateAtTarget; // WAD per second, > 0
+        int256 maxRateAtTarget; // WAD per second, >= minRateAtTarget
+        int256 maxBorrowRate; // WAD per second, >= 0; 0 = uncapped, else a hard ceiling on the charged rate
+    }
+
     /* IMMUTABLES */
 
     /// @inheritdoc IAdaptiveCurveIrm
     address public immutable MORPHO;
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    int256 public immutable CURVE_STEEPNESS;
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    int256 public immutable ADJUSTMENT_SPEED;
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    int256 public immutable TARGET_UTILIZATION;
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    int256 public immutable INITIAL_RATE_AT_TARGET;
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    int256 public immutable MIN_RATE_AT_TARGET;
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    int256 public immutable MAX_RATE_AT_TARGET;
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    int256 public immutable MAX_BORROW_RATE;
 
     /* STORAGE */
 
@@ -41,10 +74,46 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
     /// @notice Constructor.
     /// @param morpho The address of Morpho.
-    constructor(address morpho) {
+    /// @param cfg The curve parameters, lifted to immutables so a single implementation can be deployed behind a
+    /// proxy and reparametrized by upgrading to a new implementation while the stored `rateAtTarget` persists.
+    constructor(address morpho, Config memory cfg) {
         require(morpho != address(0), ErrorsLib.ZERO_ADDRESS);
+        _validateConfig(cfg);
 
         MORPHO = morpho;
+        CURVE_STEEPNESS = cfg.curveSteepness;
+        ADJUSTMENT_SPEED = cfg.adjustmentSpeed;
+        TARGET_UTILIZATION = cfg.targetUtilization;
+        INITIAL_RATE_AT_TARGET = cfg.initialRateAtTarget;
+        MIN_RATE_AT_TARGET = cfg.minRateAtTarget;
+        MAX_RATE_AT_TARGET = cfg.maxRateAtTarget;
+        MAX_BORROW_RATE = cfg.maxBorrowRate;
+    }
+
+    /// @dev Reverts unless `cfg` is a valid curve configuration, with a per-parameter error message.
+    function _validateConfig(Config memory cfg) internal pure {
+        require(cfg.curveSteepness >= WAD, ErrorsLib.INVALID_CURVE_STEEPNESS);
+        require(cfg.adjustmentSpeed >= 0, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
+        require(cfg.targetUtilization > 0 && cfg.targetUtilization < WAD, ErrorsLib.INVALID_TARGET_UTILIZATION);
+        require(cfg.minRateAtTarget > 0 && cfg.maxRateAtTarget >= cfg.minRateAtTarget, ErrorsLib.INVALID_RATE_BOUNDS);
+        require(
+            cfg.initialRateAtTarget >= cfg.minRateAtTarget && cfg.initialRateAtTarget <= cfg.maxRateAtTarget,
+            ErrorsLib.INVALID_INITIAL_RATE
+        );
+        require(cfg.maxBorrowRate >= 0, ErrorsLib.INVALID_MAX_BORROW_RATE);
+    }
+
+    /// @notice Returns all curve parameters of this implementation in a single call (convenience for integrators).
+    function getConfig() external view returns (Config memory) {
+        return Config({
+            curveSteepness: CURVE_STEEPNESS,
+            adjustmentSpeed: ADJUSTMENT_SPEED,
+            targetUtilization: TARGET_UTILIZATION,
+            initialRateAtTarget: INITIAL_RATE_AT_TARGET,
+            minRateAtTarget: MIN_RATE_AT_TARGET,
+            maxRateAtTarget: MAX_RATE_AT_TARGET,
+            maxBorrowRate: MAX_BORROW_RATE
+        });
     }
 
     /* BORROW RATES */
@@ -78,10 +147,8 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
         int256 utilization =
             int256(market.totalSupplyAssets > 0 ? market.totalBorrowAssets.wDivDown(market.totalSupplyAssets) : 0);
 
-        int256 errNormFactor = utilization > ConstantsLib.TARGET_UTILIZATION
-            ? WAD - ConstantsLib.TARGET_UTILIZATION
-            : ConstantsLib.TARGET_UTILIZATION;
-        int256 err = (utilization - ConstantsLib.TARGET_UTILIZATION).wDivToZero(errNormFactor);
+        int256 errNormFactor = utilization > TARGET_UTILIZATION ? WAD - TARGET_UTILIZATION : TARGET_UTILIZATION;
+        int256 err = (utilization - TARGET_UTILIZATION).wDivToZero(errNormFactor);
 
         int256 startRateAtTarget = rateAtTarget[id];
 
@@ -90,12 +157,12 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
         if (startRateAtTarget == 0) {
             // First interaction.
-            avgRateAtTarget = ConstantsLib.INITIAL_RATE_AT_TARGET;
-            endRateAtTarget = ConstantsLib.INITIAL_RATE_AT_TARGET;
+            avgRateAtTarget = INITIAL_RATE_AT_TARGET;
+            endRateAtTarget = INITIAL_RATE_AT_TARGET;
         } else {
             // The speed is assumed constant between two updates, but it is in fact not constant because of interest.
             // So the rate is always underestimated.
-            int256 speed = ConstantsLib.ADJUSTMENT_SPEED.wMulToZero(err);
+            int256 speed = ADJUSTMENT_SPEED.wMulToZero(err);
             // market.lastUpdate != 0 because it is not the first interaction with this market.
             // Safe "unchecked" cast because block.timestamp - market.lastUpdate <= block.timestamp <= type(int256).max.
             int256 elapsed = int256(block.timestamp - market.lastUpdate);
@@ -126,25 +193,30 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
         }
 
         // Safe "unchecked" cast because avgRateAtTarget >= 0.
-        return (uint256(_curve(avgRateAtTarget, err)), endRateAtTarget);
+        uint256 rate = uint256(_curve(avgRateAtTarget, err));
+
+        // Hard cap: clamp the charged rate to MAX_BORROW_RATE, leaving endRateAtTarget untouched. Adaptation is
+        // err-driven, not rate-driven, so the state machine is unchanged and only the reported rate is bounded.
+        if (MAX_BORROW_RATE != 0 && rate > uint256(MAX_BORROW_RATE)) rate = uint256(MAX_BORROW_RATE);
+
+        return (rate, endRateAtTarget);
     }
 
     /// @dev Returns the rate for a given `_rateAtTarget` and an `err`.
     /// The formula of the curve is the following:
     /// r = ((1-1/C)*err + 1) * rateAtTarget if err < 0
     ///     ((C-1)*err + 1) * rateAtTarget else.
-    function _curve(int256 _rateAtTarget, int256 err) private pure returns (int256) {
+    function _curve(int256 _rateAtTarget, int256 err) private view returns (int256) {
         // Non negative because 1 - 1/C >= 0, C - 1 >= 0.
-        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(ConstantsLib.CURVE_STEEPNESS) : ConstantsLib.CURVE_STEEPNESS - WAD;
+        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(CURVE_STEEPNESS) : CURVE_STEEPNESS - WAD;
         // Non negative if _rateAtTarget >= 0 because if err < 0, coeff <= 1.
         return (coeff.wMulToZero(err) + WAD).wMulToZero(int256(_rateAtTarget));
     }
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
     /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation) private pure returns (int256) {
+    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation) private view returns (int256) {
         // Non negative because MIN_RATE_AT_TARGET > 0.
-        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation))
-            .bound(ConstantsLib.MIN_RATE_AT_TARGET, ConstantsLib.MAX_RATE_AT_TARGET);
+        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(MIN_RATE_AT_TARGET, MAX_RATE_AT_TARGET);
     }
 }

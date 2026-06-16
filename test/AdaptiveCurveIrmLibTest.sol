@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
+import {ConstantsLib} from "./ConstantsLib.sol";
 import "../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
 import "../lib/morpho-blue/src/interfaces/IMorpho.sol";
 import {MorphoBalancesLib} from "../lib/morpho-blue/src/libraries/periphery/MorphoBalancesLib.sol";
@@ -16,7 +17,20 @@ contract AdaptiveCurveIrmLibTest is Test {
     address public adaptiveCurveIrm;
 
     function setUp() public {
-        adaptiveCurveIrm = address(new AdaptiveCurveIrm(address(this)));
+        adaptiveCurveIrm = address(
+            new AdaptiveCurveIrm(
+                address(this),
+                AdaptiveCurveIrm.Config({
+                    curveSteepness: ConstantsLib.CURVE_STEEPNESS,
+                    adjustmentSpeed: ConstantsLib.ADJUSTMENT_SPEED,
+                    targetUtilization: ConstantsLib.TARGET_UTILIZATION,
+                    initialRateAtTarget: ConstantsLib.INITIAL_RATE_AT_TARGET,
+                    minRateAtTarget: ConstantsLib.MIN_RATE_AT_TARGET,
+                    maxRateAtTarget: ConstantsLib.MAX_RATE_AT_TARGET,
+                    maxBorrowRate: 0
+                })
+            )
+        );
     }
 
     function testExpectedMarketBalances(

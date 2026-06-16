@@ -10,6 +10,15 @@ methods {
     function _.rateAtTarget(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
     function _.market(Morpho.Id) external => DISPATCHER(true);
     function _.borrowRateView(Morpho.MarketParams, Morpho.Market) external => DISPATCHER(true);
+    // The periphery lib reads the curve params from the IRM instance, so the getters must be resolved to the
+    // linked AdaptiveCurveIrm rather than havoc'd.
+    function _.CURVE_STEEPNESS() external => DISPATCHER(true);
+    function _.ADJUSTMENT_SPEED() external => DISPATCHER(true);
+    function _.TARGET_UTILIZATION() external => DISPATCHER(true);
+    function _.INITIAL_RATE_AT_TARGET() external => DISPATCHER(true);
+    function _.MIN_RATE_AT_TARGET() external => DISPATCHER(true);
+    function _.MAX_RATE_AT_TARGET() external => DISPATCHER(true);
+    function _.MAX_BORROW_RATE() external => DISPATCHER(true);
 }
 
 // Rule: AdaptiveCurveIrmBalancesLib behaves identically to MorphoBalancesLib

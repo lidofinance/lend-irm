@@ -6,7 +6,6 @@ import {IAdaptiveCurveIrm} from "../../interfaces/IAdaptiveCurveIrm.sol";
 
 import {ExpLib} from "../ExpLib.sol";
 import {UtilsLib} from "../UtilsLib.sol";
-import {ConstantsLib} from "../ConstantsLib.sol";
 import {MathLib, WAD_INT as WAD} from "../MathLib.sol";
 import {SharesMathLib} from "../../../../lib/morpho-blue/src/libraries/SharesMathLib.sol";
 import {MathLib as MorphoMathLib} from "../../../../lib/morpho-blue/src/libraries/MathLib.sol";
@@ -21,6 +20,18 @@ library AdaptiveCurveIrmLib {
     using MorphoMathLib for uint128;
     using SharesMathLib for uint256;
     using MorphoUtilsLib for uint256;
+
+    /// @dev Snapshot of the IRM's immutable curve params, read once per `_borrowRate` so the local-variable count
+    /// stays low enough to compile without `via_ir` (as the Certora setup requires) and each param is read once.
+    struct CurveParams {
+        int256 curveSteepness;
+        int256 adjustmentSpeed;
+        int256 targetUtilization;
+        int256 initialRateAtTarget;
+        int256 minRateAtTarget;
+        int256 maxRateAtTarget;
+        int256 maxBorrowRate;
+    }
 
     /// @dev Same as the MorphoBalancesLib.expectedMarketBalances function, but takes the market id as input.
     /// @dev Works only for markets with an AdaptiveCurveIrm as irm.
@@ -73,14 +84,11 @@ library AdaptiveCurveIrmLib {
         view
         returns (uint256, int256)
     {
-        // Safe "unchecked" cast because the utilization is smaller than 1 (scaled by WAD).
-        int256 utilization =
-            int256(market.totalSupplyAssets > 0 ? market.totalBorrowAssets.wDivDown(market.totalSupplyAssets) : 0);
+        // Curve parameters are immutable per implementation, read from the IRM instance so this matches whatever
+        // implementation the (possibly proxied) `adaptiveCurveIrm` currently points to.
+        CurveParams memory p = _params(adaptiveCurveIrm);
 
-        int256 errNormFactor = utilization > ConstantsLib.TARGET_UTILIZATION
-            ? WAD - ConstantsLib.TARGET_UTILIZATION
-            : ConstantsLib.TARGET_UTILIZATION;
-        int256 err = (utilization - ConstantsLib.TARGET_UTILIZATION).wDivToZero(errNormFactor);
+        int256 err = _err(market, p.targetUtilization);
 
         int256 startRateAtTarget = IAdaptiveCurveIrm(adaptiveCurveIrm).rateAtTarget(id);
 
@@ -89,12 +97,12 @@ library AdaptiveCurveIrmLib {
 
         if (startRateAtTarget == 0) {
             // First interaction.
-            avgRateAtTarget = ConstantsLib.INITIAL_RATE_AT_TARGET;
-            endRateAtTarget = ConstantsLib.INITIAL_RATE_AT_TARGET;
+            avgRateAtTarget = p.initialRateAtTarget;
+            endRateAtTarget = avgRateAtTarget;
         } else {
             // The speed is assumed constant between two updates, but it is in fact not constant because of interest.
             // So the rate is always underestimated.
-            int256 speed = ConstantsLib.ADJUSTMENT_SPEED.wMulToZero(err);
+            int256 speed = p.adjustmentSpeed.wMulToZero(err);
             // market.lastUpdate != 0 because it is not the first interaction with this market.
             // Safe "unchecked" cast because block.timestamp - market.lastUpdate <= block.timestamp <= type(int256).max.
             int256 elapsed = int256(block.timestamp - market.lastUpdate);
@@ -118,32 +126,64 @@ library AdaptiveCurveIrmLib {
                 // With N = 2:
                 // avg ~= curve([(startRateAtTarget + endRateAtTarget)/2 + startRateAtTarget*exp(speed*T/2)] / 2, err)
                 // avg ~= curve([startRateAtTarget + endRateAtTarget + 2*startRateAtTarget*exp(speed*T/2)] / 4, err)
-                endRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation);
-                int256 midRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation / 2);
+                endRateAtTarget =
+                    _newRateAtTarget(startRateAtTarget, linearAdaptation, p.minRateAtTarget, p.maxRateAtTarget);
+                int256 midRateAtTarget =
+                    _newRateAtTarget(startRateAtTarget, linearAdaptation / 2, p.minRateAtTarget, p.maxRateAtTarget);
                 avgRateAtTarget = (startRateAtTarget + endRateAtTarget + 2 * midRateAtTarget) / 4;
             }
         }
 
         // Safe "unchecked" cast because avgRateAtTarget >= 0.
-        return (uint256(_curve(avgRateAtTarget, err)), endRateAtTarget);
+        uint256 rate = uint256(_curve(avgRateAtTarget, err, p.curveSteepness));
+
+        // Hard cap: clamp the charged rate to maxBorrowRate, leaving endRateAtTarget untouched (mirrors the IRM).
+        if (p.maxBorrowRate != 0 && rate > uint256(p.maxBorrowRate)) rate = uint256(p.maxBorrowRate);
+
+        return (rate, endRateAtTarget);
+    }
+
+    /// @dev Reads the IRM's immutable curve params into a single in-memory snapshot.
+    function _params(address adaptiveCurveIrm) internal view returns (CurveParams memory p) {
+        IAdaptiveCurveIrm irm = IAdaptiveCurveIrm(adaptiveCurveIrm);
+        p.curveSteepness = irm.CURVE_STEEPNESS();
+        p.adjustmentSpeed = irm.ADJUSTMENT_SPEED();
+        p.targetUtilization = irm.TARGET_UTILIZATION();
+        p.initialRateAtTarget = irm.INITIAL_RATE_AT_TARGET();
+        p.minRateAtTarget = irm.MIN_RATE_AT_TARGET();
+        p.maxRateAtTarget = irm.MAX_RATE_AT_TARGET();
+        p.maxBorrowRate = irm.MAX_BORROW_RATE();
+    }
+
+    /// @dev Returns the `err` (distance from target utilization, normalized) for a given market.
+    function _err(Market memory market, int256 targetUtilization) internal pure returns (int256) {
+        // Safe "unchecked" cast because the utilization is smaller than 1 (scaled by WAD).
+        int256 utilization =
+            int256(market.totalSupplyAssets > 0 ? market.totalBorrowAssets.wDivDown(market.totalSupplyAssets) : 0);
+        int256 errNormFactor = utilization > targetUtilization ? WAD - targetUtilization : targetUtilization;
+        return (utilization - targetUtilization).wDivToZero(errNormFactor);
     }
 
     /// @dev Returns the rate for a given `_rateAtTarget` and an `err`.
     /// The formula of the curve is the following:
     /// r = ((1-1/C)*err + 1) * rateAtTarget if err < 0
     ///     ((C-1)*err + 1) * rateAtTarget else.
-    function _curve(int256 _rateAtTarget, int256 err) internal pure returns (int256) {
+    function _curve(int256 _rateAtTarget, int256 err, int256 curveSteepness) internal pure returns (int256) {
         // Non negative because 1 - 1/C >= 0, C - 1 >= 0.
-        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(ConstantsLib.CURVE_STEEPNESS) : ConstantsLib.CURVE_STEEPNESS - WAD;
+        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(curveSteepness) : curveSteepness - WAD;
         // Non negative if _rateAtTarget >= 0 because if err < 0, coeff <= 1.
         return (coeff.wMulToZero(err) + WAD).wMulToZero(int256(_rateAtTarget));
     }
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
     /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation) internal pure returns (int256) {
-        // Non negative because MIN_RATE_AT_TARGET > 0.
-        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation))
-            .bound(ConstantsLib.MIN_RATE_AT_TARGET, ConstantsLib.MAX_RATE_AT_TARGET);
+    function _newRateAtTarget(
+        int256 startRateAtTarget,
+        int256 linearAdaptation,
+        int256 minRateAtTarget,
+        int256 maxRateAtTarget
+    ) internal pure returns (int256) {
+        // Non negative because minRateAtTarget > 0.
+        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(minRateAtTarget, maxRateAtTarget);
     }
 }
