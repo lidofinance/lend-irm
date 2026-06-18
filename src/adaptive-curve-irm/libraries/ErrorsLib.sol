@@ -2,8 +2,7 @@
 pragma solidity ^0.8.0;
 
 /// @title ErrorsLib
-/// @author Morpho Labs
-/// @custom:contact security@morpho.org
+/// @author Morpho Labs. Modified by Lido.
 /// @notice Library exposing error messages.
 library ErrorsLib {
     /// @dev Thrown when passing the zero address.

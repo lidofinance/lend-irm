@@ -13,8 +13,7 @@ import {Id, MarketParams, Market} from "../../lib/morpho-blue/src/interfaces/IMo
 import {MathLib as MorphoMathLib} from "../../lib/morpho-blue/src/libraries/MathLib.sol";
 
 /// @title AdaptiveCurveIrm
-/// @author Morpho Labs
-/// @custom:contact security@morpho.org
+/// @author Morpho Labs. Modified by Lido.
 contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     using MathLib for int256;
     using UtilsLib for int256;

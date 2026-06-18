@@ -5,8 +5,7 @@ import {IIrm} from "../../../lib/morpho-blue/src/interfaces/IIrm.sol";
 import {Id} from "../../../lib/morpho-blue/src/interfaces/IMorpho.sol";
 
 /// @title IAdaptiveCurveIrm
-/// @author Morpho Labs
-/// @custom:contact security@morpho.org
+/// @author Morpho Labs. Modified by Lido.
 /// @notice Interface exposed by the AdaptiveCurveIrm.
 interface IAdaptiveCurveIrm is IIrm {
     /// @notice Address of Morpho.
