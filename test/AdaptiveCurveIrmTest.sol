@@ -379,6 +379,26 @@ contract AdaptiveCurveIrmTest is Test {
         bricked.borrowRate(mp, m);
     }
 
+    function test_edge_extremeAdjustmentSpeedDeploysButBricksOnAdaptation() public {
+        AdaptiveCurveIrm.Config memory cfg = _defaultConfig();
+        cfg.adjustmentSpeed = type(int256).max; // passes validation (>= 0), but adaptation overflows
+        AdaptiveCurveIrm bricked = new AdaptiveCurveIrm(address(this), cfg);
+        assertEq(bricked.ADJUSTMENT_SPEED(), type(int256).max, "deployed with the extreme adjustment speed");
+
+        MarketParams memory mp;
+        mp.irm = address(bricked);
+
+        // First interaction at target seeds rateAtTarget without adaptation (no overflow).
+        bricked.borrowRate(mp, _mkt(1 ether, 0.9 ether));
+
+        // A later off-target call adapts: speed = adjustmentSpeed * err overflows int256.
+        Market memory m = _mkt(1 ether, 0.3 ether);
+        vm.expectRevert(stdError.arithmeticError);
+        bricked.borrowRateView(mp, m);
+        vm.expectRevert(stdError.arithmeticError);
+        bricked.borrowRate(mp, m);
+    }
+
     function _mkt(uint256 supply, uint256 borrow) internal pure returns (Market memory m) {
         m.totalSupplyAssets = uint128(supply);
         m.totalBorrowAssets = uint128(borrow);

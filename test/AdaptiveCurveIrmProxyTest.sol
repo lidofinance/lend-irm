@@ -155,6 +155,111 @@ contract AdaptiveCurveIrmProxyTest is Test {
         );
     }
 
+    function test_upgrade_capBelowAdaptedRate_clampsImmediately_keepsState() public {
+        address proxy = _proxy(_impl(_cfg(int256(0.02 ether) / Y, int256(0.005 ether) / Y, int256(0.2 ether) / Y)));
+        _wire(proxy);
+        _adaptUp(proxy);
+
+        int256 ratBefore = _rat(proxy);
+        uint256 chargedBefore = AdaptiveCurveIrm(proxy).borrowRateView(params, _market(TARGET));
+
+        int256 cap = ratBefore / 2;
+        AdaptiveCurveIrm.Config memory c = _cfg(ratBefore, ratBefore / 2, ratBefore * 2);
+        c.maxBorrowRate = cap;
+        _upgrade(proxy, _impl(c));
+
+        assertEq(_rat(proxy), ratBefore, "rateAtTarget preserved across the upgrade");
+
+        uint256 chargedAfter = AdaptiveCurveIrm(proxy).borrowRateView(params, _market(TARGET));
+        assertEq(chargedAfter, uint256(cap), "charged rate clamped to the new cap on the next call");
+        assertLt(chargedAfter, chargedBefore, "charged rate dropped after the upgrade");
+        assertEq(_rat(proxy), ratBefore, "the cap did not touch rateAtTarget");
+    }
+
+    function test_upgrade_tighterMax_atTargetPokeDefersRebound() public {
+        address proxy = _proxy(_impl(_cfg(int256(0.02 ether) / Y, int256(0.005 ether) / Y, int256(0.2 ether) / Y)));
+        _wire(proxy);
+        _adaptUp(proxy);
+
+        int256 ratBefore = _rat(proxy);
+        int256 newMax = ratBefore / 2;
+        _upgrade(proxy, _impl(_cfg(newMax, int256(0.005 ether) / Y, newMax)));
+
+        _poke(proxy, TARGET);
+        assertEq(_rat(proxy), ratBefore, "at-target poke leaves the stored rate unbounded");
+        assertGt(_rat(proxy), newMax, "rateAtTarget still above the new MAX (rebound deferred)");
+        assertEq(
+            AdaptiveCurveIrm(proxy).borrowRateView(params, _market(TARGET)),
+            uint256(ratBefore),
+            "uncapped: the stale above-MAX rate is charged as-is"
+        );
+
+        _poke(proxy, 0.3 ether);
+        assertLe(_rat(proxy), newMax, "off-target poke re-bounds rateAtTarget down to the new MAX");
+    }
+
+    function test_upgrade_widenLetsRateCreep_thenNarrowShocks() public {
+        int256 min0 = int256(0.005 ether) / Y;
+        int256 max0 = int256(0.05 ether) / Y;
+
+        address proxy = _proxy(_impl(_cfg(max0, min0, max0)));
+        _wire(proxy);
+        _poke(proxy, TARGET);
+        assertEq(_rat(proxy), max0, "seed: at-target exactly at the 5%/yr ceiling");
+
+        _upgrade(proxy, _impl(_cfg(max0, min0, int256(0.2 ether) / Y)));
+        assertEq(_rat(proxy), max0, "widen alone: at-target still exactly 5%/yr");
+
+        _crawl(proxy, 0.98 ether, 1 hours, 1);
+        assertApproxEqRel(_ratAnnual(proxy), 0.0501 ether, 0.002 ether, "after 1h: at-target ~5.01%/yr");
+        _crawl(proxy, 0.98 ether, 1 hours, 7);
+        assertApproxEqRel(_ratAnnual(proxy), 0.0507 ether, 0.002 ether, "after 8h: at-target ~5.07%/yr");
+        _crawl(proxy, 0.98 ether, 1 hours, 4);
+        assertApproxEqRel(_ratAnnual(proxy), 0.0511 ether, 0.002 ether, "after 12h: at-target ~5.11%/yr");
+        int256 crept = _rat(proxy);
+
+        int256 maxTight = int256(0.03 ether) / Y;
+        _upgrade(proxy, _impl(_cfg(maxTight, min0, maxTight)));
+        assertEq(_rat(proxy), crept, "narrow alone: at-target unchanged (~5.11%/yr)");
+
+        _crawl(proxy, 0.98 ether, 1 hours, 1);
+        assertEq(_rat(proxy), maxTight, "shock: at-target snapped exactly onto the new 3%/yr ceiling in one step");
+    }
+
+    function test_upgrade_targetShift_changesChargedRate_keepsState() public {
+        address proxy = _proxy(_impl(_cfg(int256(0.04 ether) / Y, int256(0.005 ether) / Y, int256(0.2 ether) / Y)));
+        _wire(proxy);
+        _poke(proxy, TARGET);
+
+        int256 rat = _rat(proxy);
+        uint256 chargedBefore = AdaptiveCurveIrm(proxy).borrowRateView(params, _market(0.8 ether));
+
+        AdaptiveCurveIrm.Config memory c = _cfg(rat, rat / 2, rat * 2);
+        c.targetUtilization = int256(0.5 ether);
+        _upgrade(proxy, _impl(c));
+
+        assertEq(_rat(proxy), rat, "target change does not move the stored rate");
+        uint256 chargedAfter = AdaptiveCurveIrm(proxy).borrowRateView(params, _market(0.8 ether));
+        assertGt(chargedAfter, chargedBefore, "same utilization charges more after the target moves below it");
+    }
+
+    function test_upgrade_steepnessShift_changesChargedRate_keepsState() public {
+        address proxy = _proxy(_impl(_cfg(int256(0.04 ether) / Y, int256(0.005 ether) / Y, int256(0.2 ether) / Y)));
+        _wire(proxy);
+        _poke(proxy, TARGET);
+
+        int256 rat = _rat(proxy);
+        uint256 chargedBefore = AdaptiveCurveIrm(proxy).borrowRateView(params, _market(0.98 ether));
+
+        AdaptiveCurveIrm.Config memory c = _cfg(rat, rat / 2, rat * 2);
+        c.curveSteepness = int256(4 ether);
+        _upgrade(proxy, _impl(c));
+
+        assertEq(_rat(proxy), rat, "steepness change does not move the stored rate");
+        uint256 chargedAfter = AdaptiveCurveIrm(proxy).borrowRateView(params, _market(0.98 ether));
+        assertGt(chargedAfter, chargedBefore, "steeper curve charges more above target at the same utilization");
+    }
+
     /* HELPERS */
 
     function _cfg(int256 initial, int256 min, int256 max) internal pure returns (AdaptiveCurveIrm.Config memory) {
@@ -199,9 +304,20 @@ contract AdaptiveCurveIrmProxyTest is Test {
         }
     }
 
+    function _adaptUp(address proxy) internal {
+        _poke(proxy, TARGET);
+        for (uint256 i; i < 6; ++i) {
+            _poke(proxy, 0.98 ether);
+        }
+    }
+
     function _poke(address proxy, uint256 utilWad) internal {
+        _pokeFor(proxy, utilWad, 5 days);
+    }
+
+    function _pokeFor(address proxy, uint256 utilWad, uint256 dt) internal {
         Market memory m = _market(utilWad);
-        vm.warp(block.timestamp + 5 days);
+        vm.warp(block.timestamp + dt);
         AdaptiveCurveIrm(proxy).borrowRate(params, m);
     }
 
@@ -211,6 +327,16 @@ contract AdaptiveCurveIrmProxyTest is Test {
 
     function _rat(address proxy) internal view returns (int256) {
         return AdaptiveCurveIrm(proxy).rateAtTarget(id);
+    }
+
+    function _ratAnnual(address proxy) internal view returns (uint256) {
+        return uint256(_rat(proxy)) * uint256(Y);
+    }
+
+    function _crawl(address proxy, uint256 utilWad, uint256 dt, uint256 steps) internal {
+        for (uint256 i; i < steps; ++i) {
+            _pokeFor(proxy, utilWad, dt);
+        }
     }
 
     function _market(uint256 utilWad) internal view returns (Market memory m) {

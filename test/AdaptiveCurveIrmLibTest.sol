@@ -17,7 +17,11 @@ contract AdaptiveCurveIrmLibTest is Test {
     address public adaptiveCurveIrm;
 
     function setUp() public {
-        adaptiveCurveIrm = address(
+        adaptiveCurveIrm = _deploy(0);
+    }
+
+    function _deploy(int256 maxBorrowRate) internal returns (address) {
+        return address(
             new AdaptiveCurveIrm(
                 address(this),
                 AdaptiveCurveIrm.Config({
@@ -27,7 +31,7 @@ contract AdaptiveCurveIrmLibTest is Test {
                     initialRateAtTarget: ConstantsLib.INITIAL_RATE_AT_TARGET,
                     minRateAtTarget: ConstantsLib.MIN_RATE_AT_TARGET,
                     maxRateAtTarget: ConstantsLib.MAX_RATE_AT_TARGET,
-                    maxBorrowRate: 0
+                    maxBorrowRate: maxBorrowRate
                 })
             )
         );
@@ -40,9 +44,11 @@ contract AdaptiveCurveIrmLibTest is Test {
         uint128 initTotalSupplyShares,
         uint128 initTotalBorrowShares,
         uint128 lastUpdate,
-        uint128 fee
+        uint128 fee,
+        uint256 maxBorrowRate
     ) public {
         vm.warp(1000 days);
+        adaptiveCurveIrm = _deploy(int256(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET))));
         rateAtTarget = bound(rateAtTarget, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET));
         initTotalSupplyAssets = uint128(bound(initTotalSupplyAssets, 0, 1e35));
         initTotalBorrowAssets = uint128(bound(initTotalBorrowAssets, 0, initTotalSupplyAssets));
@@ -90,8 +96,9 @@ contract AdaptiveCurveIrmLibTest is Test {
         assertEq(totalBorrowShares, expectedTotalBorrowShares, "total borrow shares");
     }
 
-    function testBorrowRateView(uint256 rateAtTarget, Market memory market) public {
+    function testBorrowRateView(uint256 rateAtTarget, Market memory market, uint256 maxBorrowRate) public {
         vm.warp(1000 days);
+        adaptiveCurveIrm = _deploy(int256(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET))));
 
         rateAtTarget = bound(rateAtTarget, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET));
         // borrow rate doesn't revert on utilization > 1, and the test passes. Still, we require that.
