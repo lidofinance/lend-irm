@@ -32,24 +32,31 @@ interface IAdaptiveCurveIrm is IIrm {
     function MORPHO() external view returns (address);
 
     /// @notice Curve steepness (scaled by WAD).
+    /// @dev Range [WAD, 100*WAD].
     function CURVE_STEEPNESS() external view returns (int256);
 
     /// @notice Adjustment speed per second (scaled by WAD).
+    /// @dev Range [0, ~10000/year]; 0 freezes adaptation.
     function ADJUSTMENT_SPEED() external view returns (int256);
 
     /// @notice Target utilization (scaled by WAD).
+    /// @dev Range (0, WAD).
     function TARGET_UTILIZATION() external view returns (int256);
 
     /// @notice Initial rate at target per second (scaled by WAD).
+    /// @dev Range [MIN_RATE_AT_TARGET, MAX_RATE_AT_TARGET].
     function INITIAL_RATE_AT_TARGET() external view returns (int256);
 
     /// @notice Minimum rate at target per second (scaled by WAD).
+    /// @dev Must be > 0.
     function MIN_RATE_AT_TARGET() external view returns (int256);
 
     /// @notice Maximum rate at target per second (scaled by WAD).
+    /// @dev Range [MIN_RATE_AT_TARGET, ~1e6%/year].
     function MAX_RATE_AT_TARGET() external view returns (int256);
 
     /// @notice Hard ceiling on the charged borrow rate per second (scaled by WAD); 0 disables it.
+    /// @dev Applied to the curve output only, never to `rateAtTarget`; no upper bound.
     function MAX_BORROW_RATE() external view returns (uint256);
 
     /// @notice Returns the full `Config` of this implementation in a single call (convenience for integrators).

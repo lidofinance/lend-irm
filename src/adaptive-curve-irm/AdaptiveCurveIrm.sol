@@ -53,13 +53,13 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
     /* CONSTANTS */
 
-    /// @dev Maximum curve steepness = 100.
+    /// @dev Maximum curve steepness = 100 (WAD-scaled ratio).
     int256 private constant MAX_CURVE_STEEPNESS = 100 ether;
 
-    /// @dev Maximum adjustment speed = 10000/year.
+    /// @dev Maximum adjustment speed = 10000/year (WAD-scaled, per second).
     int256 private constant MAX_ADJUSTMENT_SPEED = 10_000 ether / int256(365 days);
 
-    /// @dev Maximum rate at target = 1000000%.
+    /// @dev Maximum rate at target = 10000/year = 1000000%/year (WAD-scaled, per second).
     int256 private constant MAX_RATE_AT_TARGET_LIMIT = 10_000 ether / int256(365 days);
 
     /* STORAGE */
