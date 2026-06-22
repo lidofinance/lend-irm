@@ -46,7 +46,7 @@ Only a change to the `minRateAtTarget` / `maxRateAtTarget` bounds can move the s
 
 The graph illustrates both: a new range that still contains the stored `rateAtTarget` (smooth), and a new `maxRateAtTarget` below it (snap down).
 
-![Upgrading the rate-at-target bounds: smooth vs. snap](upgrading-rate-target.png)
+![Upgrading the rate-at-target bounds: smooth vs. snap](assets/upgrading-rate-target.png)
 
 Two more things to know about an upgrade:
 
@@ -67,7 +67,7 @@ The cap clips the high-utilization peak of the curve, or the whole curve if it s
 
 With an `8%/year` cap on the same curve, the charged rate follows the curve, then holds flat where it would otherwise exceed the cap.
 
-![Borrow-rate cap: charged = min(curve, MAX_BORROW_RATE)](borrow-rate-cap.png)
+![Borrow-rate cap: charged = min(curve, MAX_BORROW_RATE)](assets/borrow-rate-cap.png)
 
 ## Periphery library
 
