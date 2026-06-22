@@ -25,19 +25,6 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     /// @notice Emitted when a borrow rate is updated.
     event BorrowRateUpdate(Id indexed id, uint256 avgBorrowRate, uint256 rateAtTarget);
 
-    /* STRUCTS */
-
-    /// @notice Curve parameters passed at construction and frozen into immutables.
-    struct Config {
-        int256 curveSteepness; // WAD, in [1e18, 100e18]
-        int256 adjustmentSpeed; // WAD per second, in [0, ~10000/year]
-        int256 targetUtilization; // WAD, in (0, 1e18)
-        int256 initialRateAtTarget; // WAD per second, in [minRateAtTarget, maxRateAtTarget]
-        int256 minRateAtTarget; // WAD per second, > 0
-        int256 maxRateAtTarget; // WAD per second, in [minRateAtTarget, ~1e6%/year]
-        int256 maxBorrowRate; // WAD per second, >= 0; 0 = uncapped, else a hard ceiling on the charged rate
-    }
-
     /* IMMUTABLES */
 
     /// @inheritdoc IAdaptiveCurveIrm
@@ -62,7 +49,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     int256 public immutable MAX_RATE_AT_TARGET;
 
     /// @inheritdoc IAdaptiveCurveIrm
-    int256 public immutable MAX_BORROW_RATE;
+    uint256 public immutable MAX_BORROW_RATE;
 
     /* CONSTANTS */
 
@@ -101,7 +88,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     }
 
     /// @dev Reverts unless `cfg` is a valid curve configuration, with a per-parameter error message.
-    function _validateConfig(Config memory cfg) internal pure {
+    function _validateConfig(Config memory cfg) private pure {
         require(
             cfg.curveSteepness >= WAD && cfg.curveSteepness <= MAX_CURVE_STEEPNESS, ErrorsLib.INVALID_CURVE_STEEPNESS
         );
@@ -118,10 +105,9 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
             cfg.initialRateAtTarget >= cfg.minRateAtTarget && cfg.initialRateAtTarget <= cfg.maxRateAtTarget,
             ErrorsLib.INVALID_INITIAL_RATE
         );
-        require(cfg.maxBorrowRate >= 0, ErrorsLib.INVALID_MAX_BORROW_RATE);
     }
 
-    /// @notice Returns all curve parameters of this implementation in a single call (convenience for integrators).
+    /// @inheritdoc IAdaptiveCurveIrm
     function getConfig() external view returns (Config memory) {
         return Config({
             curveSteepness: CURVE_STEEPNESS,
@@ -215,7 +201,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
         // Hard cap: clamp the charged rate to MAX_BORROW_RATE, leaving endRateAtTarget untouched. Adaptation is
         // err-driven, not rate-driven, so the state machine is unchanged and only the reported rate is bounded.
-        if (MAX_BORROW_RATE != 0 && rate > uint256(MAX_BORROW_RATE)) rate = uint256(MAX_BORROW_RATE);
+        if (MAX_BORROW_RATE != 0 && rate > MAX_BORROW_RATE) rate = MAX_BORROW_RATE;
 
         return (rate, endRateAtTarget);
     }
@@ -228,7 +214,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
         // Non negative because 1 - 1/C >= 0, C - 1 >= 0.
         int256 coeff = err < 0 ? WAD - WAD.wDivToZero(CURVE_STEEPNESS) : CURVE_STEEPNESS - WAD;
         // Non negative if _rateAtTarget >= 0 because if err < 0, coeff <= 1.
-        return (coeff.wMulToZero(err) + WAD).wMulToZero(int256(_rateAtTarget));
+        return (coeff.wMulToZero(err) + WAD).wMulToZero(_rateAtTarget);
     }
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.

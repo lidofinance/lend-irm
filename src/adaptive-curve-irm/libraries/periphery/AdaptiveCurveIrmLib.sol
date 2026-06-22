@@ -21,18 +21,6 @@ library AdaptiveCurveIrmLib {
     using SharesMathLib for uint256;
     using MorphoUtilsLib for uint256;
 
-    /// @dev Snapshot of the IRM's immutable curve params, read once per `_borrowRate` so the local-variable count
-    /// stays low enough to compile without `via_ir` (as the Certora setup requires) and each param is read once.
-    struct CurveParams {
-        int256 curveSteepness;
-        int256 adjustmentSpeed;
-        int256 targetUtilization;
-        int256 initialRateAtTarget;
-        int256 minRateAtTarget;
-        int256 maxRateAtTarget;
-        int256 maxBorrowRate;
-    }
-
     /// @dev Same as the MorphoBalancesLib.expectedMarketBalances function, but takes the market id as input.
     /// @dev Works only for markets with an AdaptiveCurveIrm as irm.
     /// @dev Returns the expected totalSupplyAssets, totalSupplyShares, totalBorrowAssets, totalBorrowShares.
@@ -86,7 +74,7 @@ library AdaptiveCurveIrmLib {
     {
         // Curve parameters are immutable per implementation, read from the IRM instance so this matches whatever
         // implementation the (possibly proxied) `adaptiveCurveIrm` currently points to.
-        CurveParams memory p = _params(adaptiveCurveIrm);
+        IAdaptiveCurveIrm.Config memory p = IAdaptiveCurveIrm(adaptiveCurveIrm).getConfig();
 
         int256 err = _err(market, p.targetUtilization);
 
@@ -138,21 +126,9 @@ library AdaptiveCurveIrmLib {
         uint256 rate = uint256(_curve(avgRateAtTarget, err, p.curveSteepness));
 
         // Hard cap: clamp the charged rate to maxBorrowRate, leaving endRateAtTarget untouched (mirrors the IRM).
-        if (p.maxBorrowRate != 0 && rate > uint256(p.maxBorrowRate)) rate = uint256(p.maxBorrowRate);
+        if (p.maxBorrowRate != 0 && rate > p.maxBorrowRate) rate = p.maxBorrowRate;
 
         return (rate, endRateAtTarget);
-    }
-
-    /// @dev Reads the IRM's immutable curve params into a single in-memory snapshot.
-    function _params(address adaptiveCurveIrm) internal view returns (CurveParams memory p) {
-        IAdaptiveCurveIrm irm = IAdaptiveCurveIrm(adaptiveCurveIrm);
-        p.curveSteepness = irm.CURVE_STEEPNESS();
-        p.adjustmentSpeed = irm.ADJUSTMENT_SPEED();
-        p.targetUtilization = irm.TARGET_UTILIZATION();
-        p.initialRateAtTarget = irm.INITIAL_RATE_AT_TARGET();
-        p.minRateAtTarget = irm.MIN_RATE_AT_TARGET();
-        p.maxRateAtTarget = irm.MAX_RATE_AT_TARGET();
-        p.maxBorrowRate = irm.MAX_BORROW_RATE();
     }
 
     /// @dev Returns the `err` (distance from target utilization, normalized) for a given market.
@@ -172,7 +148,7 @@ library AdaptiveCurveIrmLib {
         // Non negative because 1 - 1/C >= 0, C - 1 >= 0.
         int256 coeff = err < 0 ? WAD - WAD.wDivToZero(curveSteepness) : curveSteepness - WAD;
         // Non negative if _rateAtTarget >= 0 because if err < 0, coeff <= 1.
-        return (coeff.wMulToZero(err) + WAD).wMulToZero(int256(_rateAtTarget));
+        return (coeff.wMulToZero(err) + WAD).wMulToZero(_rateAtTarget);
     }
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.

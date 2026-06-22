@@ -20,11 +20,12 @@ contract AdaptiveCurveIrmLibTest is Test {
         adaptiveCurveIrm = _deploy(0);
     }
 
-    function _deploy(int256 maxBorrowRate) internal returns (address) {
+    /// @dev The periphery's target IRM: default curve with a configurable cap, so tests can vary just the cap.
+    function _deploy(uint256 maxBorrowRate) internal returns (address) {
         return address(
             new AdaptiveCurveIrm(
                 address(this),
-                AdaptiveCurveIrm.Config({
+                IAdaptiveCurveIrm.Config({
                     curveSteepness: ConstantsLib.CURVE_STEEPNESS,
                     adjustmentSpeed: ConstantsLib.ADJUSTMENT_SPEED,
                     targetUtilization: ConstantsLib.TARGET_UTILIZATION,
@@ -48,7 +49,7 @@ contract AdaptiveCurveIrmLibTest is Test {
         uint256 maxBorrowRate
     ) public {
         vm.warp(1000 days);
-        adaptiveCurveIrm = _deploy(int256(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET))));
+        adaptiveCurveIrm = _deploy(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET)));
         rateAtTarget = bound(rateAtTarget, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET));
         initTotalSupplyAssets = uint128(bound(initTotalSupplyAssets, 0, 1e35));
         initTotalBorrowAssets = uint128(bound(initTotalBorrowAssets, 0, initTotalSupplyAssets));
@@ -73,8 +74,7 @@ contract AdaptiveCurveIrmLibTest is Test {
 
         address morpho = makeAddr("morpho");
         // set rate at target.
-        bytes32 slot = keccak256(abi.encode(id, 0));
-        vm.store(adaptiveCurveIrm, slot, bytes32(rateAtTarget));
+        _setRateAtTarget(adaptiveCurveIrm, id, rateAtTarget);
         assertEq(IAdaptiveCurveIrm(adaptiveCurveIrm).rateAtTarget(Id.wrap(id)), int256(rateAtTarget), "rateAtTarget");
         // set market state.
         vm.mockCall(morpho, abi.encodeWithSelector(IMorpho.market.selector), abi.encode(market));
@@ -98,7 +98,7 @@ contract AdaptiveCurveIrmLibTest is Test {
 
     function testBorrowRateView(uint256 rateAtTarget, Market memory market, uint256 maxBorrowRate) public {
         vm.warp(1000 days);
-        adaptiveCurveIrm = _deploy(int256(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET))));
+        adaptiveCurveIrm = _deploy(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET)));
 
         rateAtTarget = bound(rateAtTarget, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET));
         // borrow rate doesn't revert on utilization > 1, and the test passes. Still, we require that.
@@ -111,13 +111,77 @@ contract AdaptiveCurveIrmLibTest is Test {
         bytes32 id = Id.unwrap(marketParams.id());
 
         // set rate at target.
-        // compute slot by hand.
-        bytes32 slot = keccak256(abi.encode(id, 0));
-        vm.store(adaptiveCurveIrm, slot, bytes32(rateAtTarget));
+        _setRateAtTarget(adaptiveCurveIrm, id, rateAtTarget);
         assertEq(IAdaptiveCurveIrm(adaptiveCurveIrm).rateAtTarget(Id.wrap(id)), int256(rateAtTarget), "rateAtTarget");
 
         uint256 computedBorrowRate = AdaptiveCurveIrmLib.borrowRateView(id, market, adaptiveCurveIrm);
         uint256 expectedBorrowRate = IAdaptiveCurveIrm(adaptiveCurveIrm).borrowRateView(marketParams, market);
         assertEq(computedBorrowRate, expectedBorrowRate, "computedBorrowRate");
+    }
+
+    /// The periphery borrowRateView matches the contract's own view across the full config space.
+    function testFuzz_borrowRateView_matchesContract_acrossConfigs(
+        int256 curveSteepness,
+        int256 adjustmentSpeed,
+        int256 targetUtilization,
+        int256 minRate,
+        int256 maxRate,
+        int256 initialRate,
+        uint256 maxBorrowRate,
+        bool capEnabled,
+        uint256 rateAtTarget,
+        Market memory market
+    ) public {
+        vm.warp(1000 days);
+        IAdaptiveCurveIrm.Config memory cfg = _boundedCfg(
+            curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
+        );
+        address irmAddr = address(new AdaptiveCurveIrm(address(this), cfg));
+
+        MarketParams memory mp;
+        mp.irm = irmAddr;
+        bytes32 id = Id.unwrap(mp.id());
+
+        rateAtTarget = bound(rateAtTarget, 0, uint256(cfg.maxRateAtTarget));
+        market.totalBorrowAssets = uint128(bound(market.totalBorrowAssets, 0, market.totalSupplyAssets));
+        market.lastUpdate = uint128(bound(market.lastUpdate, 0, 1000 days));
+        market.fee = uint128(bound(market.fee, 0, 0.25e18));
+
+        _setRateAtTarget(irmAddr, id, rateAtTarget);
+
+        // The periphery reads the IRM's live params per-instance; assert it matches the contract across the
+        // whole config space (not just the default ConstantsLib config).
+        uint256 fromLib = AdaptiveCurveIrmLib.borrowRateView(id, market, irmAddr);
+        uint256 fromContract = IAdaptiveCurveIrm(irmAddr).borrowRateView(mp, market);
+        assertEq(fromLib, fromContract, "periphery matches the contract across the config space");
+    }
+
+    /// @dev Squeezes raw fuzz inputs into an always-valid `Config`, so the periphery-equivalence fuzzer can vary the
+    /// whole curve.
+    function _boundedCfg(
+        int256 curveSteepness,
+        int256 adjustmentSpeed,
+        int256 targetUtilization,
+        int256 minRate,
+        int256 maxRate,
+        int256 initialRate,
+        uint256 maxBorrowRate,
+        bool capEnabled
+    ) internal view returns (IAdaptiveCurveIrm.Config memory cfg) {
+        int256 rateCeil = int256(10_000 ether) / int256(365 days); // MAX_RATE_AT_TARGET_LIMIT
+        int256 speedCeil = int256(10_000 ether) / int256(365 days); // MAX_ADJUSTMENT_SPEED
+        cfg.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
+        cfg.adjustmentSpeed = bound(adjustmentSpeed, 0, speedCeil);
+        cfg.targetUtilization = bound(targetUtilization, 1, WAD - 1);
+        cfg.minRateAtTarget = bound(minRate, 1, rateCeil);
+        cfg.maxRateAtTarget = bound(maxRate, cfg.minRateAtTarget, rateCeil);
+        cfg.initialRateAtTarget = bound(initialRate, cfg.minRateAtTarget, cfg.maxRateAtTarget);
+        cfg.maxBorrowRate = capEnabled ? bound(maxBorrowRate, 1, 10_000 ether / uint256(365 days)) : 0;
+    }
+
+    /// @dev Forces the IRM's stored `rateAtTarget[id]` to `rate` via vm.store, so equivalence checks start from a known
+    /// state.
+    function _setRateAtTarget(address irmAddr, bytes32 marketId, uint256 rate) internal {
+        vm.store(irmAddr, keccak256(abi.encode(marketId, uint256(0))), bytes32(rate));
     }
 }

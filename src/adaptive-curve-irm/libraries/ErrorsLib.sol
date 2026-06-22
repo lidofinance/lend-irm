@@ -25,7 +25,4 @@ library ErrorsLib {
 
     /// @dev Thrown when `initialRateAtTarget` is outside [minRateAtTarget, maxRateAtTarget].
     string internal constant INVALID_INITIAL_RATE = "invalid initialRateAtTarget";
-
-    /// @dev Thrown when `maxBorrowRate` is negative.
-    string internal constant INVALID_MAX_BORROW_RATE = "invalid maxBorrowRate";
 }
