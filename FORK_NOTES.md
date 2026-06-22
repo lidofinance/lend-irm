@@ -16,12 +16,12 @@ git -C /tmp/mbi checkout 2bce6da3ebe910ceeec963781aa3f4b4322c296e
 diff -rq src /tmp/mbi/src
 ```
 
-Footprint: `AdaptiveCurveIrm.sol`, `interfaces/IAdaptiveCurveIrm.sol`, `libraries/ErrorsLib.sol`, `libraries/periphery/AdaptiveCurveIrmLib.sol` differ; `libraries/ConstantsLib.sol` is relocated to `test/` (upstream-only here); everything else is identical. The only net-new file is `test/AdaptiveCurveIrmProxyTest.sol` (proxy harness).
+Footprint: `AdaptiveCurveIrm.sol`, `interfaces/IAdaptiveCurveIrm.sol`, `libraries/ErrorsLib.sol`, `libraries/periphery/AdaptiveCurveIrmLib.sol` differ; `libraries/ConstantsLib.sol` is relocated to `test/` (upstream-only here); everything else is identical.
 
 ## Core changes (`AdaptiveCurveIrm.sol`)
 
 - **Per-deployment immutable params.** The six `ConstantsLib` curve constants are lifted to constructor immutables via a `Config` struct, so each deployment fixes its own curve. The curve math is byte-identical to upstream.
-- **Constructor validation.** Curve values are now inputs (upstream's constructor took/validated none), so `_validateConfig` checks signs and ordering per-parameter: `curveSteepness >= WAD`, `adjustmentSpeed >= 0`, `targetUtilization` in `(0, WAD)`, `minRateAtTarget > 0`, `maxRateAtTarget >= minRateAtTarget`, `initialRateAtTarget` in `[min, max]`, `maxBorrowRate >= 0`. There is **no upper bound** on `curveSteepness`, `adjustmentSpeed`, or the rate parameters; an absurd value overflows the curve math and bricks accrual — a deployer footgun (see SPECIFICATION.md).
+- **Constructor validation.** Curve values are now inputs (upstream's constructor took/validated none), so `_validateConfig` checks each parameter against a valid range: `curveSteepness` in `[WAD, 100*WAD]`, `adjustmentSpeed` in `[0, ~10000/year]`, `targetUtilization` in `(0, WAD)`, `minRateAtTarget > 0`, `maxRateAtTarget` in `[minRateAtTarget, ~1e6%/year]`, `initialRateAtTarget` in `[min, max]`, `maxBorrowRate >= 0`. These bounds, upper limits included, keep the curve math within its non-overflowing range so `borrowRate` returns a non-negative rate; values outside them revert at construction. They enforce well-formedness only, not economic soundness — within the bounds the deployer owns the curve (see docs/specification.md).
 - **Optional `MAX_BORROW_RATE` cap.** Hard ceiling on the charged rate (`0` disables it); clamps the returned rate without touching the adapting `rateAtTarget`, so the state machine is unchanged.
 - **`getConfig()`** returns the full `Config` (integrator convenience; on the contract, not `IAdaptiveCurveIrm`; unused by the core path or periphery).
 - **Proxy-compatible.** Immutables live in impl bytecode (read during `delegatecall`); the only storage is `rateAtTarget` (slot 0, unchanged from upstream). So one impl can run behind an upgradeable proxy and be reparametrized by upgrading while `rateAtTarget` persists. ERC-1967 impl/admin pointers sit in dedicated slots that never collide with slot 0, and any future storage field must be appended after it. The proxy lives in the product repo.
@@ -37,10 +37,10 @@ Footprint: `AdaptiveCurveIrm.sol`, `interfaces/IAdaptiveCurveIrm.sol`, `librarie
 
 - **Drop-in at the call site:** the `IIrm` surface keeps upstream signatures and semantics; Morpho and integrators are unaffected.
 - **Not drop-in at deployment:** the constructor is `(address morpho, Config cfg)`, and curve behavior is per-deployment, not the upstream constants.
-- **Reparametrization is an upgrade, not a setter:** the only way to change a live deployment's params is upgrading the impl behind the proxy, which can move the charged rate discontinuously on the next interaction (see "Proxy And Upgrades" in SPECIFICATION.md).
+- **Reparametrization is an upgrade, not a setter:** the only way to change a live deployment's params is upgrading the impl behind the proxy, which can move the charged rate discontinuously on the next interaction (see the "Upgradable" section in docs/specification.md).
 - **Unchanged:** MIT, `pragma 0.8.19`, `evm_version = "paris"`.
 
 ## Tests and verification
 
 - Foundry: upstream tests are retained and adapted to the `Config` constructor (default from `test/ConstantsLib.sol`); `testConstants` is dropped (now covered by constructor validation). Fork tests add deployment/validation, the cap, config-space fuzzing, a config-parametrized curve oracle, curve edge cases, and the proxy/upgrade suite (against a minimal test-only ERC-1967 proxy).
-- Certora: `confs/{BorrowRateView,ExpectedMarketBalances}.conf` prove the periphery equivalent to the contract (values and reverts); specs/harness updated for instance-read params; confs pin `solc-0.8.19`.
+- Certora: `certora/confs/{BorrowRateView,ExpectedMarketBalances}.conf` prove the periphery equivalent to the contract (values and reverts); specs/harness updated for instance-read params; confs pin `solc-0.8.19`.

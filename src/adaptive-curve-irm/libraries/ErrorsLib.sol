@@ -11,16 +11,16 @@ library ErrorsLib {
     /// @dev Thrown when the caller is not Morpho.
     string internal constant NOT_MORPHO = "not Morpho";
 
-    /// @dev Thrown when `curveSteepness` is below WAD.
+    /// @dev Thrown when `curveSteepness` is outside [WAD, 100 * WAD].
     string internal constant INVALID_CURVE_STEEPNESS = "invalid curveSteepness";
 
-    /// @dev Thrown when `adjustmentSpeed` is negative.
+    /// @dev Thrown when `adjustmentSpeed` is negative or above its upper limit.
     string internal constant INVALID_ADJUSTMENT_SPEED = "invalid adjustmentSpeed";
 
     /// @dev Thrown when `targetUtilization` is outside (0, WAD).
     string internal constant INVALID_TARGET_UTILIZATION = "invalid targetUtilization";
 
-    /// @dev Thrown when the rate-at-target bounds are invalid (minRateAtTarget <= 0 or maxRateAtTarget < min).
+    /// @dev Thrown unless 0 < minRateAtTarget <= maxRateAtTarget <= upper limit.
     string internal constant INVALID_RATE_BOUNDS = "invalid rate bounds";
 
     /// @dev Thrown when `initialRateAtTarget` is outside [minRateAtTarget, maxRateAtTarget].

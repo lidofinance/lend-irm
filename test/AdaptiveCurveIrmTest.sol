@@ -64,7 +64,15 @@ contract AdaptiveCurveIrmTest is Test {
         _expectRevert(cfg, ErrorsLib.INVALID_CURVE_STEEPNESS);
 
         cfg = _defaultConfig();
+        cfg.curveSteepness = int256(100 ether) + 1; // > 100 * WAD
+        _expectRevert(cfg, ErrorsLib.INVALID_CURVE_STEEPNESS);
+
+        cfg = _defaultConfig();
         cfg.adjustmentSpeed = -1; // < 0
+        _expectRevert(cfg, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
+
+        cfg = _defaultConfig();
+        cfg.adjustmentSpeed = int256(10_000 ether) / int256(365 days) + 1; // > limit
         _expectRevert(cfg, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
 
         cfg = _defaultConfig();
@@ -81,6 +89,10 @@ contract AdaptiveCurveIrmTest is Test {
 
         cfg = _defaultConfig();
         cfg.maxRateAtTarget = cfg.minRateAtTarget - 1; // < min
+        _expectRevert(cfg, ErrorsLib.INVALID_RATE_BOUNDS);
+
+        cfg = _defaultConfig();
+        cfg.maxRateAtTarget = int256(10_000 ether) / int256(365 days) + 1; // > limit
         _expectRevert(cfg, ErrorsLib.INVALID_RATE_BOUNDS);
 
         cfg = _defaultConfig();
@@ -357,46 +369,28 @@ contract AdaptiveCurveIrmTest is Test {
         assertEq(zeroSupply, zeroUtil, "supply=0 behaves as utilization=0");
     }
 
-    function test_edge_extremeRateAtTargetDeploysButBricksAccrual() public {
-        int256 extreme = type(int256).max / 3; // passes validation, but the curve math cannot hold it
+    function test_edge_configAtLimitsDeploysAndComputes() public {
+        int256 rateLimit = int256(10_000 ether) / int256(365 days);
         AdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        cfg.minRateAtTarget = extreme;
-        cfg.maxRateAtTarget = extreme;
-        cfg.initialRateAtTarget = extreme;
-
-        // Deployment succeeds despite the absurd rate (no upper-bound validation).
-        AdaptiveCurveIrm bricked = new AdaptiveCurveIrm(address(this), cfg);
-        assertEq(bricked.INITIAL_RATE_AT_TARGET(), extreme, "deployed with the extreme rate");
+        cfg.curveSteepness = int256(100 ether); // max steepness
+        cfg.adjustmentSpeed = int256(10_000 ether) / int256(365 days); // max speed
+        cfg.minRateAtTarget = rateLimit;
+        cfg.maxRateAtTarget = rateLimit; // rateAtTarget pinned at the ceiling
+        cfg.initialRateAtTarget = rateLimit;
+        AdaptiveCurveIrm atLimit = new AdaptiveCurveIrm(address(this), cfg);
 
         MarketParams memory mp;
-        mp.irm = address(bricked);
-        Market memory m = _mkt(1 ether, 0.9 ether); // at target: multiplier == WAD, still overflows
+        mp.irm = address(atLimit);
 
-        vm.expectRevert(stdError.arithmeticError);
-        bricked.borrowRateView(mp, m);
+        // Seed rateAtTarget, then a large above-target jump — the worst case for the curve and adaptation math.
+        atLimit.borrowRate(mp, _mkt(1 ether, 0.9 ether));
+        Market memory m = _mkt(1 ether, 0.99 ether);
+        m.lastUpdate = uint128(block.timestamp);
+        vm.warp(block.timestamp + 365 days);
 
-        vm.expectRevert(stdError.arithmeticError);
-        bricked.borrowRate(mp, m);
-    }
-
-    function test_edge_extremeAdjustmentSpeedDeploysButBricksOnAdaptation() public {
-        AdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        cfg.adjustmentSpeed = type(int256).max; // passes validation (>= 0), but adaptation overflows
-        AdaptiveCurveIrm bricked = new AdaptiveCurveIrm(address(this), cfg);
-        assertEq(bricked.ADJUSTMENT_SPEED(), type(int256).max, "deployed with the extreme adjustment speed");
-
-        MarketParams memory mp;
-        mp.irm = address(bricked);
-
-        // First interaction at target seeds rateAtTarget without adaptation (no overflow).
-        bricked.borrowRate(mp, _mkt(1 ether, 0.9 ether));
-
-        // A later off-target call adapts: speed = adjustmentSpeed * err overflows int256.
-        Market memory m = _mkt(1 ether, 0.3 ether);
-        vm.expectRevert(stdError.arithmeticError);
-        bricked.borrowRateView(mp, m);
-        vm.expectRevert(stdError.arithmeticError);
-        bricked.borrowRate(mp, m);
+        // The chosen limits stay clear of int256 overflow, so the rate computation does not revert.
+        atLimit.borrowRateView(mp, m);
+        atLimit.borrowRate(mp, m);
     }
 
     function _mkt(uint256 supply, uint256 borrow) internal pure returns (Market memory m) {

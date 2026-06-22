@@ -29,12 +29,12 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
     /// @notice Curve parameters passed at construction and frozen into immutables.
     struct Config {
-        int256 curveSteepness; // WAD, >= 1e18
-        int256 adjustmentSpeed; // WAD per second, >= 0
+        int256 curveSteepness; // WAD, in [1e18, 100e18]
+        int256 adjustmentSpeed; // WAD per second, in [0, ~10000/year]
         int256 targetUtilization; // WAD, in (0, 1e18)
         int256 initialRateAtTarget; // WAD per second, in [minRateAtTarget, maxRateAtTarget]
         int256 minRateAtTarget; // WAD per second, > 0
-        int256 maxRateAtTarget; // WAD per second, >= minRateAtTarget
+        int256 maxRateAtTarget; // WAD per second, in [minRateAtTarget, ~1e6%/year]
         int256 maxBorrowRate; // WAD per second, >= 0; 0 = uncapped, else a hard ceiling on the charged rate
     }
 
@@ -64,6 +64,17 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     /// @inheritdoc IAdaptiveCurveIrm
     int256 public immutable MAX_BORROW_RATE;
 
+    /* CONSTANTS */
+
+    /// @dev Maximum curve steepness = 100.
+    int256 private constant MAX_CURVE_STEEPNESS = 100 ether;
+
+    /// @dev Maximum adjustment speed = 10000/year.
+    int256 private constant MAX_ADJUSTMENT_SPEED = 10_000 ether / int256(365 days);
+
+    /// @dev Maximum rate at target = 1000000%.
+    int256 private constant MAX_RATE_AT_TARGET_LIMIT = 10_000 ether / int256(365 days);
+
     /* STORAGE */
 
     /// @inheritdoc IAdaptiveCurveIrm
@@ -91,10 +102,18 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
     /// @dev Reverts unless `cfg` is a valid curve configuration, with a per-parameter error message.
     function _validateConfig(Config memory cfg) internal pure {
-        require(cfg.curveSteepness >= WAD, ErrorsLib.INVALID_CURVE_STEEPNESS);
-        require(cfg.adjustmentSpeed >= 0, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
+        require(
+            cfg.curveSteepness >= WAD && cfg.curveSteepness <= MAX_CURVE_STEEPNESS, ErrorsLib.INVALID_CURVE_STEEPNESS
+        );
+        require(
+            cfg.adjustmentSpeed >= 0 && cfg.adjustmentSpeed <= MAX_ADJUSTMENT_SPEED, ErrorsLib.INVALID_ADJUSTMENT_SPEED
+        );
         require(cfg.targetUtilization > 0 && cfg.targetUtilization < WAD, ErrorsLib.INVALID_TARGET_UTILIZATION);
-        require(cfg.minRateAtTarget > 0 && cfg.maxRateAtTarget >= cfg.minRateAtTarget, ErrorsLib.INVALID_RATE_BOUNDS);
+        require(
+            cfg.minRateAtTarget > 0 && cfg.maxRateAtTarget >= cfg.minRateAtTarget
+                && cfg.maxRateAtTarget <= MAX_RATE_AT_TARGET_LIMIT,
+            ErrorsLib.INVALID_RATE_BOUNDS
+        );
         require(
             cfg.initialRateAtTarget >= cfg.minRateAtTarget && cfg.initialRateAtTarget <= cfg.maxRateAtTarget,
             ErrorsLib.INVALID_INITIAL_RATE
