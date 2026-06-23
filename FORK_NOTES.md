@@ -43,4 +43,4 @@ Footprint: `AdaptiveCurveIrm.sol`, `interfaces/IAdaptiveCurveIrm.sol`, `librarie
 ## Tests and verification
 
 - Foundry: upstream tests are retained and adapted to the `Config` constructor (default from `test/ConstantsLib.sol`); `testConstants` is dropped (now covered by constructor validation). Fork tests add deployment/validation, the cap, config-space fuzzing, a config-parametrized curve oracle, curve edge cases, and the proxy/upgrade suite (against a minimal test-only ERC-1967 proxy).
-- Certora: `certora/confs/{BorrowRateView,ExpectedMarketBalances}.conf` prove the periphery equivalent to the contract (values and reverts); specs/harness updated for instance-read params; confs pin `solc-0.8.19`.
+- Certora: `certora/confs/{BorrowRateView,ExpectedMarketBalances}.conf` prove the periphery equivalent to the contract (values and reverts); `MaxBorrowRate.conf` proves the cap bounds both `borrowRate` and `borrowRateView` when enabled; `RateAtTargetBand.conf` proves `borrowRate` keeps `rateAtTarget[id]` within `[MIN_RATE_AT_TARGET, MAX_RATE_AT_TARGET]`. Specs/harness updated for instance-read params; confs pin `solc-0.8.19`.
