@@ -2,6 +2,9 @@
 pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
+import {MarketConfig} from "../src/adaptive-curve-irm/MarketConfig.sol";
+import {MarketConfigFactory} from "../src/adaptive-curve-irm/MarketConfigFactory.sol";
+import {IMarketConfig} from "../src/adaptive-curve-irm/interfaces/IMarketConfig.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
@@ -17,12 +20,17 @@ contract AdaptiveCurveIrmTest is Test {
     event BorrowRateUpdate(Id indexed id, uint256 avgBorrowRate, uint256 rateAtTarget);
 
     IAdaptiveCurveIrm internal irm;
+    MarketConfigFactory internal factory;
     MarketParams internal marketParams = MarketParams({
         loanToken: address(0), collateralToken: address(0), oracle: address(0), irm: address(0), lltv: 0
     });
 
     function setUp() public {
-        irm = new AdaptiveCurveIrm(address(this), _defaultConfig());
+        // morpho == owner == address(this): the test is both the Morpho caller and the owner (sets configs). The
+        // factory is permissionless; configs it deploys are valid for any IRM bound to it.
+        factory = new MarketConfigFactory();
+        irm = new AdaptiveCurveIrm(address(this), address(this));
+        _setConfig(address(irm), marketParams.id(), _defaultConfig());
         vm.warp(90 days);
 
         bytes4[] memory selectors = new bytes4[](1);
@@ -35,8 +43,12 @@ contract AdaptiveCurveIrmTest is Test {
     /* Inherited from morpho-org/morpho-blue-irm @ 2bce6da, adapted to the Config constructor. */
 
     function testDeployment() public {
+        // The constructor rejects a zero morpho or owner.
         vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
-        new AdaptiveCurveIrm(address(0), _defaultConfig());
+        new AdaptiveCurveIrm(address(0), address(this));
+
+        vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
+        new AdaptiveCurveIrm(address(this), address(0));
     }
 
     function testFirstBorrowRateUtilizationZero() public {
@@ -196,8 +208,6 @@ contract AdaptiveCurveIrmTest is Test {
     }
 
     function testRateAfter3WeeksUtilizationTargetPingEveryMinute() public {
-        irm = new AdaptiveCurveIrm(address(this), _defaultConfig());
-
         Market memory market;
         market.totalSupplyAssets = 1 ether;
         market.totalBorrowAssets = uint128(uint256(ConstantsLib.TARGET_UTILIZATION));
@@ -371,87 +381,21 @@ contract AdaptiveCurveIrmTest is Test {
 
     /* ================================ LIDO FORK TESTS ================================ */
 
-    /* ---- Deployment & config validation ---- */
+    /* ---- Config registration ---- */
+    /* Curve-param validation and getConfig round-trip moved to MarketConfigTest (validation now lives in the
+       MarketConfig constructor). */
 
-    /// Every Config field is exposed through its immutable getter and round-trips via getConfig().
-    function testDeploymentExposesImmutableParams() public {
-        IAdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        AdaptiveCurveIrm deployed = new AdaptiveCurveIrm(address(this), cfg);
+    /// A market with no registered config cannot be priced: both the state-changing call and the view revert.
+    function testBorrowRateRevertsWhenConfigNotSet() public {
+        MarketParams memory unregistered = marketParams;
+        unregistered.loanToken = address(0xDEAD); // a fresh id never registered on `irm`
+        Market memory market = _market(1 ether, 0.9 ether);
 
-        // Every Config field is readable through its immutable getter.
-        assertEq(deployed.CURVE_STEEPNESS(), cfg.curveSteepness, "curveSteepness");
-        assertEq(deployed.ADJUSTMENT_SPEED(), cfg.adjustmentSpeed, "adjustmentSpeed");
-        assertEq(deployed.TARGET_UTILIZATION(), cfg.targetUtilization, "targetUtilization");
-        assertEq(deployed.INITIAL_RATE_AT_TARGET(), cfg.initialRateAtTarget, "initialRateAtTarget");
-        assertEq(deployed.MIN_RATE_AT_TARGET(), cfg.minRateAtTarget, "minRateAtTarget");
-        assertEq(deployed.MAX_RATE_AT_TARGET(), cfg.maxRateAtTarget, "maxRateAtTarget");
-        assertEq(deployed.MAX_BORROW_RATE(), cfg.maxBorrowRate, "maxBorrowRate");
+        vm.expectRevert(bytes(ErrorsLib.CONFIG_NOT_SET));
+        irm.borrowRate(unregistered, market);
 
-        // getConfig() round-trips the full struct.
-        IAdaptiveCurveIrm.Config memory got = deployed.getConfig();
-        assertEq(got.curveSteepness, cfg.curveSteepness, "getConfig.curveSteepness");
-        assertEq(got.adjustmentSpeed, cfg.adjustmentSpeed, "getConfig.adjustmentSpeed");
-        assertEq(got.targetUtilization, cfg.targetUtilization, "getConfig.targetUtilization");
-        assertEq(got.initialRateAtTarget, cfg.initialRateAtTarget, "getConfig.initialRateAtTarget");
-        assertEq(got.minRateAtTarget, cfg.minRateAtTarget, "getConfig.minRateAtTarget");
-        assertEq(got.maxRateAtTarget, cfg.maxRateAtTarget, "getConfig.maxRateAtTarget");
-        assertEq(got.maxBorrowRate, cfg.maxBorrowRate, "getConfig.maxBorrowRate");
-    }
-
-    /// The constructor rejects each parameter just outside both ends of its valid range.
-    function testDeploymentRevertsOnInvalidParams() public {
-        IAdaptiveCurveIrm.Config memory cfg;
-
-        // Each parameter is rejected at both ends of its valid range.
-        cfg = _defaultConfig();
-        cfg.curveSteepness = WAD - 1; // < 1e18
-        _expectRevert(cfg, ErrorsLib.INVALID_CURVE_STEEPNESS);
-
-        cfg = _defaultConfig();
-        cfg.curveSteepness = int256(100 ether) + 1; // > 100 * WAD
-        _expectRevert(cfg, ErrorsLib.INVALID_CURVE_STEEPNESS);
-
-        cfg = _defaultConfig();
-        cfg.adjustmentSpeed = -1; // < 0
-        _expectRevert(cfg, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
-
-        cfg = _defaultConfig();
-        cfg.adjustmentSpeed = int256(10_000 ether) / int256(365 days) + 1; // > limit
-        _expectRevert(cfg, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
-
-        cfg = _defaultConfig();
-        cfg.targetUtilization = 0; // <= 0
-        _expectRevert(cfg, ErrorsLib.INVALID_TARGET_UTILIZATION);
-
-        cfg = _defaultConfig();
-        cfg.targetUtilization = WAD; // >= 1e18
-        _expectRevert(cfg, ErrorsLib.INVALID_TARGET_UTILIZATION);
-
-        cfg = _defaultConfig();
-        cfg.minRateAtTarget = 0; // <= 0
-        _expectRevert(cfg, ErrorsLib.INVALID_RATE_BOUNDS);
-
-        cfg = _defaultConfig();
-        cfg.maxRateAtTarget = cfg.minRateAtTarget - 1; // < min
-        _expectRevert(cfg, ErrorsLib.INVALID_RATE_BOUNDS);
-
-        cfg = _defaultConfig();
-        cfg.maxRateAtTarget = int256(10_000 ether) / int256(365 days) + 1; // > limit
-        _expectRevert(cfg, ErrorsLib.INVALID_RATE_BOUNDS);
-
-        cfg = _defaultConfig();
-        cfg.initialRateAtTarget = cfg.minRateAtTarget - 1; // < min
-        _expectRevert(cfg, ErrorsLib.INVALID_INITIAL_RATE);
-
-        cfg = _defaultConfig();
-        cfg.initialRateAtTarget = cfg.maxRateAtTarget + 1; // > max
-        _expectRevert(cfg, ErrorsLib.INVALID_INITIAL_RATE);
-    }
-
-    /// The default (upstream-equivalent) config passes validation and deploys.
-    function testDefaultConfigIsValid() public {
-        AdaptiveCurveIrm deployed = new AdaptiveCurveIrm(address(this), _defaultConfig());
-        assertEq(deployed.CURVE_STEEPNESS(), ConstantsLib.CURVE_STEEPNESS, "default config deployed");
+        vm.expectRevert(bytes(ErrorsLib.CONFIG_NOT_SET));
+        irm.borrowRateView(unregistered, market);
     }
 
     /* ---- Access control ---- */
@@ -459,7 +403,7 @@ contract AdaptiveCurveIrmTest is Test {
     /// Only Morpho may call state-changing borrowRate; borrowRateView stays open to anyone.
     function testBorrowRateOnlyMorpho(address caller) public {
         vm.assume(caller != address(this)); // address(this) is MORPHO (set in setUp)
-        Market memory market = _mkt(1 ether, 0.9 ether);
+        Market memory market = _market(1 ether, 0.9 ether);
 
         // State-changing borrowRate is Morpho-only.
         vm.prank(caller);
@@ -471,30 +415,52 @@ contract AdaptiveCurveIrmTest is Test {
         irm.borrowRateView(marketParams, market);
     }
 
+    /// setConfig is owner-only.
+    function testSetConfigOnlyOwner(address caller) public {
+        vm.assume(caller != address(this)); // address(this) is the owner (set in setUp)
+        IMarketConfig config = factory.createConfig(_defaultConfig());
+
+        vm.prank(caller);
+        vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
+        AdaptiveCurveIrm(address(irm)).setConfig(marketParams.id(), config);
+    }
+
+    /// setConfig accepts any MarketConfig (no factory-provenance gate): a directly-deployed config works and prices.
+    function testSetConfigAcceptsDirectlyDeployedConfig() public {
+        IMarketConfig config = new MarketConfig(_defaultConfig()); // deployed directly, not via the factory
+        AdaptiveCurveIrm(address(irm)).setConfig(marketParams.id(), config);
+
+        assertEq(address(irm.marketConfig(marketParams.id())), address(config), "config set");
+        Market memory market = _market(1 ether, uint256(ConstantsLib.TARGET_UTILIZATION));
+        assertEq(irm.borrowRateView(marketParams, market), uint256(ConstantsLib.INITIAL_RATE_AT_TARGET), "it prices");
+    }
+
     /* ---- Borrow-rate cap ---- */
 
     /// A cap below the curve's tip clamps the charged rate to MAX_BORROW_RATE.
     function testMaxBorrowRateClampsChargedRate() public {
         // Deploy a capped IRM whose cap sits below the curve's tip at full utilization.
-        IAdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        uint256 tip = uint256(ConstantsLib.INITIAL_RATE_AT_TARGET.wMulToZero(ConstantsLib.CURVE_STEEPNESS));
-        cfg.maxBorrowRate = tip / 2; // cap below the tip
-        AdaptiveCurveIrm capped = new AdaptiveCurveIrm(address(this), cfg);
+        IMarketConfig.Config memory config = _defaultConfig();
+        uint256 curveTip = uint256(ConstantsLib.INITIAL_RATE_AT_TARGET.wMulToZero(ConstantsLib.CURVE_STEEPNESS));
+        config.maxBorrowRate = curveTip / 2; // cap below the tip
+        AdaptiveCurveIrm capped = _newIrm();
+        _setConfig(address(capped), marketParams.id(), config);
 
         Market memory market;
         market.totalBorrowAssets = 1 ether;
         market.totalSupplyAssets = 1 ether;
 
         // Uncapped charges the full tip; capped is clamped to MAX_BORROW_RATE.
-        assertEq(irm.borrowRateView(marketParams, market), tip, "uncapped charges the full tip");
-        assertEq(capped.borrowRateView(marketParams, market), cfg.maxBorrowRate, "charged rate clamped");
+        assertEq(irm.borrowRateView(marketParams, market), curveTip, "uncapped charges the full tip");
+        assertEq(capped.borrowRateView(marketParams, market), config.maxBorrowRate, "charged rate clamped");
     }
 
     /// The cap bounds only the charged rate; rateAtTarget adapts the same as uncapped.
     function testMaxBorrowRateDoesNotAffectRateAtTarget() public {
-        IAdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        cfg.maxBorrowRate = uint256(ConstantsLib.INITIAL_RATE_AT_TARGET); // well below the high-util tip
-        AdaptiveCurveIrm capped = new AdaptiveCurveIrm(address(this), cfg);
+        IMarketConfig.Config memory config = _defaultConfig();
+        config.maxBorrowRate = uint256(ConstantsLib.INITIAL_RATE_AT_TARGET); // well below the high-util tip
+        AdaptiveCurveIrm capped = _newIrm();
+        _setConfig(address(capped), marketParams.id(), config);
 
         Market memory market;
         market.totalSupplyAssets = 1 ether;
@@ -518,113 +484,119 @@ contract AdaptiveCurveIrmTest is Test {
 
     /// Two markets (distinct ids) on one IRM adapt independently — one up, one down.
     function test_marketsAdaptIndependently() public {
-        MarketParams memory a = marketParams;
-        a.loanToken = address(0xA);
-        MarketParams memory b = marketParams;
-        b.loanToken = address(0xB);
-        Id ida = a.id();
-        Id idb = b.id();
-        assertTrue(Id.unwrap(ida) != Id.unwrap(idb), "distinct ids");
+        MarketParams memory paramsUp = marketParams;
+        paramsUp.loanToken = address(0xA);
+        MarketParams memory paramsDown = marketParams;
+        paramsDown.loanToken = address(0xB);
+        Id idUp = paramsUp.id();
+        Id idDown = paramsDown.id();
+        assertTrue(Id.unwrap(idUp) != Id.unwrap(idDown), "distinct ids");
+
+        // Both markets share the default curve, registered independently per id.
+        _setConfig(address(irm), idUp, _defaultConfig());
+        _setConfig(address(irm), idDown, _defaultConfig());
 
         // Seed both at target -> both at INITIAL_RATE_AT_TARGET.
-        irm.borrowRate(a, _mkt(1 ether, 0.9 ether));
-        irm.borrowRate(b, _mkt(1 ether, 0.9 ether));
+        irm.borrowRate(paramsUp, _market(1 ether, 0.9 ether));
+        irm.borrowRate(paramsDown, _market(1 ether, 0.9 ether));
 
-        // Drive A above target and B below target over the same span.
-        Market memory ma = _mkt(1 ether, 0.99 ether);
-        ma.lastUpdate = uint128(block.timestamp);
-        Market memory mb = _mkt(1 ether, 0.1 ether);
-        mb.lastUpdate = uint128(block.timestamp);
+        // Drive one market above target and the other below target over the same span.
+        Market memory marketUp = _market(1 ether, 0.99 ether);
+        marketUp.lastUpdate = uint128(block.timestamp);
+        Market memory marketDown = _market(1 ether, 0.1 ether);
+        marketDown.lastUpdate = uint128(block.timestamp);
         vm.warp(block.timestamp + 30 days);
-        irm.borrowRate(a, ma);
-        irm.borrowRate(b, mb);
+        irm.borrowRate(paramsUp, marketUp);
+        irm.borrowRate(paramsDown, marketDown);
 
-        assertGt(irm.rateAtTarget(ida), ConstantsLib.INITIAL_RATE_AT_TARGET, "market A adapted up");
-        assertLt(irm.rateAtTarget(idb), ConstantsLib.INITIAL_RATE_AT_TARGET, "market B adapted down");
+        assertGt(irm.rateAtTarget(idUp), ConstantsLib.INITIAL_RATE_AT_TARGET, "up-driven market adapted up");
+        assertLt(irm.rateAtTarget(idDown), ConstantsLib.INITIAL_RATE_AT_TARGET, "down-driven market adapted down");
     }
 
     /// curveSteepness == WAD makes the curve flat: one rate at every utilization.
     function test_edge_steepnessOne_flatCurve() public {
-        IAdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        cfg.curveSteepness = WAD;
-        (AdaptiveCurveIrm flat, MarketParams memory mp) = _deploy(cfg);
+        IMarketConfig.Config memory config = _defaultConfig();
+        config.curveSteepness = WAD;
+        (AdaptiveCurveIrm flat, MarketParams memory deployedParams) = _deploy(config);
 
         // Steepness 1 -> the curve is flat: the same rate at every utilization.
         uint256 initial = uint256(ConstantsLib.INITIAL_RATE_AT_TARGET);
-        assertEq(flat.borrowRateView(mp, _mkt(1 ether, 0)), initial, "util=0 is flat");
-        assertEq(flat.borrowRateView(mp, _mkt(1 ether, 0.9 ether)), initial, "util=target is flat");
-        assertEq(flat.borrowRateView(mp, _mkt(1 ether, 1 ether)), initial, "util=1 is flat");
+        assertEq(flat.borrowRateView(deployedParams, _market(1 ether, 0)), initial, "util=0 is flat");
+        assertEq(flat.borrowRateView(deployedParams, _market(1 ether, 0.9 ether)), initial, "util=target is flat");
+        assertEq(flat.borrowRateView(deployedParams, _market(1 ether, 1 ether)), initial, "util=1 is flat");
     }
 
     /// adjustmentSpeed == 0 freezes rateAtTarget across any number of off-target calls.
     function test_edge_zeroAdjustmentSpeed_neverAdapts() public {
-        IAdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        cfg.adjustmentSpeed = 0;
-        (AdaptiveCurveIrm fixedIrm, MarketParams memory mp) = _deploy(cfg);
+        IMarketConfig.Config memory config = _defaultConfig();
+        config.adjustmentSpeed = 0;
+        (AdaptiveCurveIrm fixedIrm, MarketParams memory deployedParams) = _deploy(config);
 
-        fixedIrm.borrowRate(mp, _mkt(1 ether, 0.9 ether)); // rateAtTarget := INITIAL
+        fixedIrm.borrowRate(deployedParams, _market(1 ether, 0.9 ether)); // rateAtTarget := INITIAL
         // Repeated off-target calls must never move rateAtTarget when the speed is zero.
         for (uint256 i; i < 5; ++i) {
-            Market memory m = _mkt(1 ether, i % 2 == 0 ? 0.3 ether : 0.98 ether);
-            m.lastUpdate = uint128(block.timestamp);
+            Market memory market = _market(1 ether, i % 2 == 0 ? 0.3 ether : 0.98 ether);
+            market.lastUpdate = uint128(block.timestamp);
             vm.warp(block.timestamp + 10 days);
-            fixedIrm.borrowRate(mp, m);
+            fixedIrm.borrowRate(deployedParams, market);
         }
-        assertEq(fixedIrm.rateAtTarget(mp.id()), ConstantsLib.INITIAL_RATE_AT_TARGET, "rateAtTarget never moved");
+        assertEq(
+            fixedIrm.rateAtTarget(deployedParams.id()), ConstantsLib.INITIAL_RATE_AT_TARGET, "rateAtTarget never moved"
+        );
     }
 
     /// min == max pins rateAtTarget even over a long adapting call.
     function test_edge_pinnedRateAtTarget_minEqualsMax() public {
-        int256 pin = ConstantsLib.INITIAL_RATE_AT_TARGET;
-        IAdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        cfg.minRateAtTarget = pin;
-        cfg.maxRateAtTarget = pin;
-        cfg.initialRateAtTarget = pin;
-        (AdaptiveCurveIrm pinned, MarketParams memory mp) = _deploy(cfg);
+        int256 pinnedRate = ConstantsLib.INITIAL_RATE_AT_TARGET;
+        IMarketConfig.Config memory config = _defaultConfig();
+        config.minRateAtTarget = pinnedRate;
+        config.maxRateAtTarget = pinnedRate;
+        config.initialRateAtTarget = pinnedRate;
+        (AdaptiveCurveIrm pinned, MarketParams memory deployedParams) = _deploy(config);
 
         // With min == max, rateAtTarget is pinned even across a long adapting call.
-        pinned.borrowRate(mp, _mkt(1 ether, 0.9 ether));
-        Market memory m = _mkt(1 ether, 0.99 ether);
-        m.lastUpdate = uint128(block.timestamp);
+        pinned.borrowRate(deployedParams, _market(1 ether, 0.9 ether));
+        Market memory market = _market(1 ether, 0.99 ether);
+        market.lastUpdate = uint128(block.timestamp);
         vm.warp(block.timestamp + 100 days);
-        pinned.borrowRate(mp, m);
-        assertEq(pinned.rateAtTarget(mp.id()), pin, "rateAtTarget stays pinned when min == max");
+        pinned.borrowRate(deployedParams, market);
+        assertEq(pinned.rateAtTarget(deployedParams.id()), pinnedRate, "rateAtTarget stays pinned when min == max");
     }
 
     /// Utilization above 100% does not revert and keeps raising the rate.
     function test_edge_utilizationAboveOne_doesNotRevert() public {
-        uint256 atOne = irm.borrowRateView(marketParams, _mkt(1 ether, 1 ether));
-        uint256 aboveOne = irm.borrowRateView(marketParams, _mkt(1 ether, 2 ether));
+        uint256 atOne = irm.borrowRateView(marketParams, _market(1 ether, 1 ether));
+        uint256 aboveOne = irm.borrowRateView(marketParams, _market(1 ether, 2 ether));
         assertGt(aboveOne, atOne, "rate keeps rising above 100% utilization");
     }
 
     /// Zero supply with a positive borrow is treated as zero utilization.
     function test_edge_zeroSupplyPositiveBorrow_actsAsZeroUtilization() public {
-        uint256 zeroSupply = irm.borrowRateView(marketParams, _mkt(0, 5 ether));
-        uint256 zeroUtil = irm.borrowRateView(marketParams, _mkt(1 ether, 0));
+        uint256 zeroSupply = irm.borrowRateView(marketParams, _market(0, 5 ether));
+        uint256 zeroUtil = irm.borrowRateView(marketParams, _market(1 ether, 0));
         assertEq(zeroSupply, zeroUtil, "supply=0 behaves as utilization=0");
     }
 
     /// A config at the validation ceilings still computes without int256 overflow.
     function test_edge_configAtLimitsDeploysAndComputes() public {
         int256 rateLimit = int256(10_000 ether) / int256(365 days);
-        IAdaptiveCurveIrm.Config memory cfg = _defaultConfig();
-        cfg.curveSteepness = int256(100 ether); // max steepness
-        cfg.adjustmentSpeed = int256(10_000 ether) / int256(365 days); // max speed
-        cfg.minRateAtTarget = rateLimit;
-        cfg.maxRateAtTarget = rateLimit; // rateAtTarget pinned at the ceiling
-        cfg.initialRateAtTarget = rateLimit;
-        (AdaptiveCurveIrm atLimit, MarketParams memory mp) = _deploy(cfg);
+        IMarketConfig.Config memory config = _defaultConfig();
+        config.curveSteepness = int256(100 ether); // max steepness
+        config.adjustmentSpeed = int256(10_000 ether) / int256(365 days); // max speed
+        config.minRateAtTarget = rateLimit;
+        config.maxRateAtTarget = rateLimit; // rateAtTarget pinned at the ceiling
+        config.initialRateAtTarget = rateLimit;
+        (AdaptiveCurveIrm atLimit, MarketParams memory deployedParams) = _deploy(config);
 
         // Seed rateAtTarget, then a large above-target jump — the worst case for the curve and adaptation math.
-        atLimit.borrowRate(mp, _mkt(1 ether, 0.9 ether));
-        Market memory m = _mkt(1 ether, 0.99 ether);
-        m.lastUpdate = uint128(block.timestamp);
+        atLimit.borrowRate(deployedParams, _market(1 ether, 0.9 ether));
+        Market memory market = _market(1 ether, 0.99 ether);
+        market.lastUpdate = uint128(block.timestamp);
         vm.warp(block.timestamp + 365 days);
 
         // The chosen limits stay clear of int256 overflow, so the rate computation does not revert.
-        atLimit.borrowRateView(mp, m);
-        atLimit.borrowRate(mp, m);
+        atLimit.borrowRateView(deployedParams, market);
+        atLimit.borrowRate(deployedParams, market);
     }
 
     /* ---- Fuzz & differential ---- */
@@ -643,22 +615,22 @@ contract AdaptiveCurveIrmTest is Test {
         uint128 borrowed,
         uint256 elapsed
     ) public {
-        IAdaptiveCurveIrm.Config memory cfg = _boundedConfig(
+        IMarketConfig.Config memory config = _boundedConfig(
             curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
         );
-        (AdaptiveCurveIrm fuzzed, MarketParams memory mp) = _deploy(cfg);
+        (AdaptiveCurveIrm fuzzed, MarketParams memory deployedParams) = _deploy(config);
 
         Market memory market;
         market.totalSupplyAssets = supply;
         market.totalBorrowAssets = uint128(bound(borrowed, 0, supply));
 
         // First interaction (rateAtTarget == 0 -> INITIAL_RATE_AT_TARGET).
-        _assertConfigInvariants(fuzzed, mp, market, cfg);
+        _assertConfigInvariants(fuzzed, deployedParams, market, config);
 
         // Advance time so the next call exercises the adapting branch.
         market.lastUpdate = uint128(block.timestamp);
         vm.warp(block.timestamp + bound(elapsed, 0, 365 days));
-        _assertConfigInvariants(fuzzed, mp, market, cfg);
+        _assertConfigInvariants(fuzzed, deployedParams, market, config);
     }
 
     /// Across the full accepted config space (up to the ceilings), the invariants hold without reverting.
@@ -677,23 +649,24 @@ contract AdaptiveCurveIrmTest is Test {
     ) public {
         // Covers the whole accepted config space, up to the validation ceilings the operating-band fuzzer does not
         // reach. Asserts only non-revert and the structural invariants, not a reference match.
-        IAdaptiveCurveIrm.Config memory cfg = _fullRangeConfig(
+        IMarketConfig.Config memory config = _fullRangeConfig(
             curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
         );
-        (AdaptiveCurveIrm fuzzed, MarketParams memory mp) = _deploy(cfg);
+        (AdaptiveCurveIrm fuzzed, MarketParams memory deployedParams) = _deploy(config);
 
         Market memory market;
         market.totalSupplyAssets = supply;
         market.totalBorrowAssets = uint128(bound(borrowed, 0, supply));
 
-        _assertConfigInvariants(fuzzed, mp, market, cfg);
+        _assertConfigInvariants(fuzzed, deployedParams, market, config);
 
         market.lastUpdate = uint128(block.timestamp);
         vm.warp(block.timestamp + bound(elapsed, 0, 365 days));
-        _assertConfigInvariants(fuzzed, mp, market, cfg);
+        _assertConfigInvariants(fuzzed, deployedParams, market, config);
     }
 
-    /// The charged rate and rateAtTarget match an independent config-parametrized reference.
+    /// The charged rate and rateAtTarget match an independent config-parametrized reference, across the FULL accepted
+    /// config space (up to the validation ceilings), not just the operating band.
     function testFuzz_curveMatchesConfigParametrizedReference(
         int256 curveSteepness,
         int256 adjustmentSpeed,
@@ -709,41 +682,41 @@ contract AdaptiveCurveIrmTest is Test {
         uint128 borrowed1,
         uint256 elapsed
     ) public {
-        IAdaptiveCurveIrm.Config memory cfg = _boundedConfig(
+        IMarketConfig.Config memory config = _fullRangeConfig(
             curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
         );
-        (AdaptiveCurveIrm fuzzed, MarketParams memory mp) = _deploy(cfg);
-        Id id = mp.id();
+        (AdaptiveCurveIrm fuzzed, MarketParams memory deployedParams) = _deploy(config);
+        Id id = deployedParams.id();
 
         // First interaction sets rateAtTarget = INITIAL_RATE_AT_TARGET so the next call exercises the adapting path.
-        Market memory m0;
-        m0.totalSupplyAssets = supply0;
-        m0.totalBorrowAssets = uint128(bound(borrowed0, 0, supply0));
-        fuzzed.borrowRate(mp, m0);
-        assertEq(fuzzed.rateAtTarget(id), cfg.initialRateAtTarget, "rateAtTarget = INITIAL after first interaction");
+        Market memory seedMarket;
+        seedMarket.totalSupplyAssets = supply0;
+        seedMarket.totalBorrowAssets = uint128(bound(borrowed0, 0, supply0));
+        fuzzed.borrowRate(deployedParams, seedMarket);
+        assertEq(fuzzed.rateAtTarget(id), config.initialRateAtTarget, "rateAtTarget = INITIAL after first interaction");
 
         // Adapting interaction against the config-parametrized reference.
-        Market memory m1;
-        m1.totalSupplyAssets = supply1;
-        m1.totalBorrowAssets = uint128(bound(borrowed1, 0, supply1));
-        m1.lastUpdate = uint128(block.timestamp);
+        Market memory adaptingMarket;
+        adaptingMarket.totalSupplyAssets = supply1;
+        adaptingMarket.totalBorrowAssets = uint128(bound(borrowed1, 0, supply1));
+        adaptingMarket.lastUpdate = uint128(block.timestamp);
         vm.warp(block.timestamp + bound(elapsed, 0, 365 days));
 
-        (uint256 expRate, int256 expEnd) = _refBorrowRate(cfg, fuzzed.rateAtTarget(id), m1);
+        (uint256 expectedRate, int256 expectedEndRate) = _refBorrowRate(config, fuzzed.rateAtTarget(id), adaptingMarket);
 
-        uint256 gotView = fuzzed.borrowRateView(mp, m1);
-        uint256 gotRate = fuzzed.borrowRate(mp, m1);
+        uint256 gotView = fuzzed.borrowRateView(deployedParams, adaptingMarket);
+        uint256 gotRate = fuzzed.borrowRate(deployedParams, adaptingMarket);
 
         assertEq(gotView, gotRate, "borrowRateView == borrowRate");
-        assertEq(gotRate, expRate, "charged rate matches config-parametrized reference");
-        assertEq(fuzzed.rateAtTarget(id), expEnd, "rateAtTarget matches config-parametrized reference");
+        assertEq(gotRate, expectedRate, "charged rate matches config-parametrized reference");
+        assertEq(fuzzed.rateAtTarget(id), expectedEndRate, "rateAtTarget matches config-parametrized reference");
     }
 
     /* ==================================== HELPERS ==================================== */
 
     /// @dev The baseline config (upstream curve constants, cap off). Used by setUp and any test needing a "normal" IRM.
-    function _defaultConfig() internal pure returns (IAdaptiveCurveIrm.Config memory) {
-        return IAdaptiveCurveIrm.Config({
+    function _defaultConfig() internal pure returns (IMarketConfig.Config memory) {
+        return IMarketConfig.Config({
             curveSteepness: ConstantsLib.CURVE_STEEPNESS,
             adjustmentSpeed: ConstantsLib.ADJUSTMENT_SPEED,
             targetUtilization: ConstantsLib.TARGET_UTILIZATION,
@@ -754,27 +727,37 @@ contract AdaptiveCurveIrmTest is Test {
         });
     }
 
-    /// @dev Spins up an IRM for `cfg` and the `MarketParams` that addresses it (the id is derived from it),
-    /// so tests skip the new-contract + wire boilerplate.
-    function _deploy(IAdaptiveCurveIrm.Config memory cfg)
+    /// @dev Deploys an IRM with the test as morpho and owner.
+    function _newIrm() internal returns (AdaptiveCurveIrm irm_) {
+        irm_ = new AdaptiveCurveIrm(address(this), address(this));
+    }
+
+    /// @dev Deploys `config` through the factory and points `irm_` at it for `id` (the test is the owner).
+    function _setConfig(address irm_, Id id, IMarketConfig.Config memory config)
         internal
-        returns (AdaptiveCurveIrm irm_, MarketParams memory mp)
+        returns (address configAddress)
     {
-        irm_ = new AdaptiveCurveIrm(address(this), cfg);
-        mp.irm = address(irm_);
+        IMarketConfig deployed = factory.createConfig(config);
+        AdaptiveCurveIrm(irm_).setConfig(id, deployed);
+        configAddress = address(deployed);
+    }
+
+    /// @dev Spins up an IRM for `config` and the `MarketParams` that addresses it (the id is derived from it),
+    /// setting the config so the market can be priced — tests skip the new-contract + wire boilerplate.
+    function _deploy(IMarketConfig.Config memory config)
+        internal
+        returns (AdaptiveCurveIrm irm_, MarketParams memory deployedParams)
+    {
+        irm_ = _newIrm();
+        deployedParams.irm = address(irm_);
+        _setConfig(address(irm_), deployedParams.id(), config);
     }
 
     /// @dev A bare `Market` carrying only supply/borrow (i.e. a utilization) — for rate calls where nothing else
     /// matters.
-    function _mkt(uint256 supply, uint256 borrow) internal pure returns (Market memory m) {
-        m.totalSupplyAssets = uint128(supply);
-        m.totalBorrowAssets = uint128(borrow);
-    }
-
-    /// @dev Asserts that deploying `cfg` reverts with `err`; the validation test calls it once per invalid parameter.
-    function _expectRevert(IAdaptiveCurveIrm.Config memory cfg, string memory err) internal {
-        vm.expectRevert(bytes(err));
-        new AdaptiveCurveIrm(address(this), cfg);
+    function _market(uint256 supply, uint256 borrow) internal pure returns (Market memory market) {
+        market.totalSupplyAssets = uint128(supply);
+        market.totalBorrowAssets = uint128(borrow);
     }
 
     /// @dev Squeezes raw fuzz inputs into an always-valid `Config` in the realistic operating band, so the
@@ -788,18 +771,18 @@ contract AdaptiveCurveIrmTest is Test {
         int256 initialRate,
         uint256 maxBorrowRate,
         bool capEnabled
-    ) internal view returns (IAdaptiveCurveIrm.Config memory cfg) {
+    ) internal view returns (IMarketConfig.Config memory config) {
         // Operating band: realistic, overflow-safe ranges where production markets live. The full validation range
         // (up to MAX_ADJUSTMENT_SPEED and MAX_RATE_AT_TARGET_LIMIT) is covered by
         // testFuzz_fullRangeConfigUpholdsInvariants.
         int256 rateCeil = int256(10 ether) / int256(365 days); // 1000%/yr
-        cfg.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
-        cfg.adjustmentSpeed = bound(adjustmentSpeed, 0, int256(1000 ether) / int256(365 days));
-        cfg.targetUtilization = bound(targetUtilization, 1, WAD - 1);
-        cfg.minRateAtTarget = bound(minRate, 1, rateCeil);
-        cfg.maxRateAtTarget = bound(maxRate, cfg.minRateAtTarget, rateCeil);
-        cfg.initialRateAtTarget = bound(initialRate, cfg.minRateAtTarget, cfg.maxRateAtTarget);
-        cfg.maxBorrowRate = capEnabled ? bound(maxBorrowRate, 1, 50 ether / uint256(365 days)) : 0;
+        config.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
+        config.adjustmentSpeed = bound(adjustmentSpeed, 0, int256(1000 ether) / int256(365 days));
+        config.targetUtilization = bound(targetUtilization, 1, WAD - 1);
+        config.minRateAtTarget = bound(minRate, 1, rateCeil);
+        config.maxRateAtTarget = bound(maxRate, config.minRateAtTarget, rateCeil);
+        config.initialRateAtTarget = bound(initialRate, config.minRateAtTarget, config.maxRateAtTarget);
+        config.maxBorrowRate = capEnabled ? bound(maxBorrowRate, 1, 50 ether / uint256(365 days)) : 0;
     }
 
     /// @dev Like `_boundedConfig` but stretched to the true validation ceilings, so the invariant fuzzer also
@@ -813,69 +796,77 @@ contract AdaptiveCurveIrmTest is Test {
         int256 initialRate,
         uint256 maxBorrowRate,
         bool capEnabled
-    ) internal view returns (IAdaptiveCurveIrm.Config memory cfg) {
+    ) internal view returns (IMarketConfig.Config memory config) {
         // The true validation ceilings: adjustmentSpeed up to MAX_ADJUSTMENT_SPEED, rates up to
         // MAX_RATE_AT_TARGET_LIMIT.
         int256 rateCeil = int256(10_000 ether) / int256(365 days); // = MAX_RATE_AT_TARGET_LIMIT (~1e6%/yr)
         int256 speedCeil = int256(10_000 ether) / int256(365 days); // = MAX_ADJUSTMENT_SPEED (~10000/yr)
-        cfg.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
-        cfg.adjustmentSpeed = bound(adjustmentSpeed, 0, speedCeil);
-        cfg.targetUtilization = bound(targetUtilization, 1, WAD - 1);
-        cfg.minRateAtTarget = bound(minRate, 1, rateCeil);
-        cfg.maxRateAtTarget = bound(maxRate, cfg.minRateAtTarget, rateCeil);
-        cfg.initialRateAtTarget = bound(initialRate, cfg.minRateAtTarget, cfg.maxRateAtTarget);
-        cfg.maxBorrowRate = capEnabled ? bound(maxBorrowRate, 1, 10_000 ether / uint256(365 days)) : 0;
+        config.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
+        config.adjustmentSpeed = bound(adjustmentSpeed, 0, speedCeil);
+        config.targetUtilization = bound(targetUtilization, 1, WAD - 1);
+        config.minRateAtTarget = bound(minRate, 1, rateCeil);
+        config.maxRateAtTarget = bound(maxRate, config.minRateAtTarget, rateCeil);
+        config.initialRateAtTarget = bound(initialRate, config.minRateAtTarget, config.maxRateAtTarget);
+        config.maxBorrowRate = capEnabled ? bound(maxBorrowRate, 1, 10_000 ether / uint256(365 days)) : 0;
     }
 
     /// @dev The shared check for the invariant fuzzers: after one borrowRate call, view == state, the cap holds,
     /// the rate stays under a sane upper bound, and rateAtTarget is within [min, max].
     function _assertConfigInvariants(
         AdaptiveCurveIrm fuzzed,
-        MarketParams memory mp,
+        MarketParams memory deployedParams,
         Market memory market,
-        IAdaptiveCurveIrm.Config memory cfg
+        IMarketConfig.Config memory config
     ) internal {
-        uint256 rateView = fuzzed.borrowRateView(mp, market);
-        uint256 rate = fuzzed.borrowRate(mp, market);
+        uint256 rateView = fuzzed.borrowRateView(deployedParams, market);
+        uint256 rate = fuzzed.borrowRate(deployedParams, market);
         assertEq(rateView, rate, "borrowRateView == borrowRate");
-        if (cfg.maxBorrowRate != 0) assertLe(rate, cfg.maxBorrowRate, "rate <= MAX_BORROW_RATE");
-        // For utilization <= 1 the uncapped rate cannot exceed curveSteepness * maxRateAtTarget; a sign flip in the
-        // curve math would wrap the int->uint cast far above this, so the bound doubles as a non-negativity guard.
-        assertLe(rate, uint256(cfg.curveSteepness.wMulToZero(cfg.maxRateAtTarget)) + 1, "rate within sane upper bound");
-        int256 rat = fuzzed.rateAtTarget(mp.id());
-        assertGe(rat, cfg.minRateAtTarget, "rateAtTarget >= MIN_RATE_AT_TARGET");
-        assertLe(rat, cfg.maxRateAtTarget, "rateAtTarget <= MAX_RATE_AT_TARGET");
+        if (config.maxBorrowRate != 0) assertLe(rate, config.maxBorrowRate, "rate <= MAX_BORROW_RATE");
+        // For utilization <= 1 the uncapped rate is exactly `curveSteepness * avgRateAtTarget` at its worst case
+        // (err == WAD), and avgRateAtTarget <= maxRateAtTarget, so the rate never exceeds this tight upper bound (no
+        // rounding slack needed, since `wMulToZero` is monotonic). A sign flip in the curve math would wrap the
+        // int->uint cast far above the bound, so the assert doubles as a non-negativity guard.
+        assertLe(
+            rate, uint256(config.curveSteepness.wMulToZero(config.maxRateAtTarget)), "rate within tight upper bound"
+        );
+        int256 storedRate = fuzzed.rateAtTarget(deployedParams.id());
+        assertGe(storedRate, config.minRateAtTarget, "rateAtTarget >= MIN_RATE_AT_TARGET");
+        assertLe(storedRate, config.maxRateAtTarget, "rateAtTarget <= MAX_RATE_AT_TARGET");
     }
 
     /// @dev The differential test's oracle: recomputes the borrow rate from scratch (curve + adaptation + cap)
     /// so the contract's output can be checked against an independent implementation.
-    function _refBorrowRate(IAdaptiveCurveIrm.Config memory cfg, int256 start, Market memory market)
+    function _refBorrowRate(IMarketConfig.Config memory config, int256 startRate, Market memory market)
         internal
         view
         returns (uint256, int256)
     {
-        int256 err = _refErr(market, cfg.targetUtilization);
+        int256 err = _refErr(market, config.targetUtilization);
 
-        int256 avg;
-        int256 end;
-        if (start == 0) {
-            avg = cfg.initialRateAtTarget;
-            end = cfg.initialRateAtTarget;
+        int256 avgRateAtTarget;
+        int256 endRateAtTarget;
+        if (startRate == 0) {
+            avgRateAtTarget = config.initialRateAtTarget;
+            endRateAtTarget = config.initialRateAtTarget;
         } else {
-            int256 linearAdaptation = cfg.adjustmentSpeed.wMulToZero(err) * int256(block.timestamp - market.lastUpdate);
+            int256 linearAdaptation =
+                config.adjustmentSpeed.wMulToZero(err) * int256(block.timestamp - market.lastUpdate);
             if (linearAdaptation == 0) {
-                avg = start;
-                end = start;
+                avgRateAtTarget = startRate;
+                endRateAtTarget = startRate;
             } else {
-                end = _refNewRateAtTarget(start, linearAdaptation, cfg.minRateAtTarget, cfg.maxRateAtTarget);
-                int256 mid = _refNewRateAtTarget(start, linearAdaptation / 2, cfg.minRateAtTarget, cfg.maxRateAtTarget);
-                avg = (start + end + 2 * mid) / 4;
+                endRateAtTarget =
+                    _refNewRateAtTarget(startRate, linearAdaptation, config.minRateAtTarget, config.maxRateAtTarget);
+                int256 midRateAtTarget = _refNewRateAtTarget(
+                    startRate, linearAdaptation / 2, config.minRateAtTarget, config.maxRateAtTarget
+                );
+                avgRateAtTarget = (startRate + endRateAtTarget + 2 * midRateAtTarget) / 4;
             }
         }
 
-        uint256 rate = uint256(_refCurve(avg, err, cfg.curveSteepness));
-        if (cfg.maxBorrowRate != 0 && rate > cfg.maxBorrowRate) rate = cfg.maxBorrowRate;
-        return (rate, end);
+        uint256 rate = uint256(_refCurve(avgRateAtTarget, err, config.curveSteepness));
+        if (config.maxBorrowRate != 0 && rate > config.maxBorrowRate) rate = config.maxBorrowRate;
+        return (rate, endRateAtTarget);
     }
 
     /// @dev Reference `err`: utilization's signed deviation from target, scaled to [-1, +1] (-1 empty, 0 at

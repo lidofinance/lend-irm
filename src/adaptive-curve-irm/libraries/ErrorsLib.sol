@@ -11,6 +11,12 @@ library ErrorsLib {
     /// @dev Thrown when the caller is not Morpho.
     string internal constant NOT_MORPHO = "not Morpho";
 
+    /// @dev Thrown when the caller of an owner-only function is not the owner.
+    string internal constant NOT_OWNER = "not owner";
+
+    /// @dev Thrown when a borrow rate is requested for a market that has no config set.
+    string internal constant CONFIG_NOT_SET = "config not set";
+
     /// @dev Thrown when `curveSteepness` is outside [WAD, 100 * WAD].
     string internal constant INVALID_CURVE_STEEPNESS = "invalid curveSteepness";
 

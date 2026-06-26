@@ -16,31 +16,42 @@ git -C /tmp/mbi checkout 2bce6da3ebe910ceeec963781aa3f4b4322c296e
 diff -rq src /tmp/mbi/src
 ```
 
-Footprint: `AdaptiveCurveIrm.sol`, `interfaces/IAdaptiveCurveIrm.sol`, `libraries/ErrorsLib.sol`, `libraries/periphery/AdaptiveCurveIrmLib.sol` differ; `libraries/ConstantsLib.sol` is relocated to `test/` (upstream-only here); everything else is identical.
+Footprint:
 
-## Core changes (`AdaptiveCurveIrm.sol`)
+- **Modified** in place: `AdaptiveCurveIrm.sol`, `interfaces/IAdaptiveCurveIrm.sol`, `libraries/ErrorsLib.sol`, `libraries/periphery/AdaptiveCurveIrmLib.sol`.
+- **New** (fork-only): `MarketConfig.sol`, `MarketConfigFactory.sol`, `interfaces/IMarketConfig.sol`, `interfaces/IMarketConfigFactory.sol`.
+- **Relocated**: `libraries/ConstantsLib.sol` moved to `test/` (the canonical default config the tests build on; upstream-only here).
+- Everything else is identical.
 
-- **Per-deployment immutable params.** The six `ConstantsLib` curve constants are lifted to constructor immutables via a `Config` struct, so each deployment fixes its own curve. The curve math is byte-identical to upstream.
-- **Constructor validation.** Curve values are now inputs (upstream's constructor took/validated none), so `_validateConfig` checks each parameter against a valid range: `curveSteepness` in `[WAD, 100*WAD]`, `adjustmentSpeed` in `[0, ~10000/year]`, `targetUtilization` in `(0, WAD)`, `minRateAtTarget > 0`, `maxRateAtTarget` in `[minRateAtTarget, ~1e6%/year]`, `initialRateAtTarget` in `[min, max]`, `maxBorrowRate >= 0`. These bounds, upper limits included, keep the curve math within its non-overflowing range so `borrowRate` returns a non-negative rate; values outside them revert at construction. They enforce well-formedness only, not economic soundness — within the bounds the deployer owns the curve (see SPECIFICATION.md).
-- **Optional `MAX_BORROW_RATE` cap.** Hard ceiling on the charged rate (`0` disables it); clamps the returned rate without touching the adapting `rateAtTarget`, so the state machine is unchanged.
-- **`getConfig()`** returns the full `Config` (integrator convenience; on the contract, not `IAdaptiveCurveIrm`; unused by the core path or periphery).
-- **Proxy-compatible.** Immutables live in impl bytecode (read during `delegatecall`); the only storage is `rateAtTarget` (slot 0, unchanged from upstream). So one impl can run behind an upgradeable proxy and be reparametrized by upgrading while `rateAtTarget` persists. ERC-1967 impl/admin pointers sit in dedicated slots that never collide with slot 0, and any future storage field must be appended after it. The proxy lives in the product repo.
+## Core changes
+
+The curve math and its adaptation are **byte-identical to upstream**. The fork only changes where the curve parameters come from and adds an optional output cap.
+
+- **Per-market config in its own immutable contract.** Upstream's six `ConstantsLib` curve constants (plus the new `maxBorrowRate`) become a `Config` struct frozen into a `MarketConfig` contract, validated in its constructor. One `MarketConfig` holds one curve; a market points at one.
+- **Per-market config pointer on the IRM.** `AdaptiveCurveIrm` holds `mapping(Id => IMarketConfig) marketConfig` and reads a market's parameters by an external static call to its `MarketConfig` (`getConfig()`) when computing the rate. A market with no config set reverts (`config not set`). Immutables are `MORPHO` and `OWNER`; storage is `rateAtTarget` and `marketConfig`. The IRM does not reference the factory.
+- **Permissionless factory + provenance.** `MarketConfigFactory` has no owner and no IRM reference: `createConfig(cfg)` deploys `new MarketConfig(cfg)` (which validates in its constructor) and records `isValidDeployment[config] = true`. Deploying a config grants no power — it is an inert data holder; the provenance record is for off-chain/periphery verification, not consumed on-chain.
+- **Owner-gated activation.** `IRM.setConfig(id, config)` is `OWNER`-only; the IRM trusts the owner to point a market at a well-formed config (no on-chain provenance gate, matching Euler V2's core setter). `OWNER` is immutable — changing it is a proxy upgrade (see Proxiable below).
+- **Reparametrization by re-pointing.** The owner deploys a fresh `MarketConfig` (via the factory) and calls `setConfig(id, newConfig)`, changing the market's curve while `rateAtTarget` persists. There is no parameter setter (each `MarketConfig` is immutable). See the "Reparametrization" section of SPECIFICATION.md for the timing/snap semantics.
+- **Optional `maxBorrowRate` cap.** Hard ceiling on the charged rate (`0` disables it); clamps the returned rate without touching the adapting `rateAtTarget`, so the state machine is unchanged.
+- **Proxiable, no initializer.** Both `MORPHO` and `OWNER` are immutable, so the constructor writes no storage and the only storage — `rateAtTarget` (slot 0, unchanged from upstream) and `marketConfig` (slot 1) — starts zero (the correct initial state). The implementation runs behind a proxy with **no initializer** (and no init front-run): immutables are read from impl bytecode under `delegatecall`, storage belongs to the proxy. Deployment is deploy-impl then deploy-proxy. Changing the owner or the logic is a proxy upgrade to a freshly-constructed impl; the configs and `rateAtTarget` persist. `OWNER` is thus immutable per-impl but replaceable by the proxy admin via upgrade — the proxy admin is the ultimate authority until the proxy is ossified. Any future storage field must be appended after `marketConfig`. The proxy lives in the product repo.
 
 ## Interfaces and libraries
 
-- `IAdaptiveCurveIrm.sol`: adds getters for the six curve params and `MAX_BORROW_RATE`; `MORPHO()`, `rateAtTarget(Id)`, and the `IIrm` surface (`borrowRate`/`borrowRateView`) are unchanged.
-- `ErrorsLib.sol`: keeps `ZERO_ADDRESS`/`NOT_MORPHO`, adds the per-parameter validation errors.
-- `AdaptiveCurveIrmLib.sol` (periphery): reads params from the IRM instance instead of `ConstantsLib` (tracks the live, possibly-proxied impl) and applies the same clamp. Public surface unchanged, but behavior is now instance-specific per the deployed `Config` — consumers that assumed the upstream constants must re-check.
+- `IMarketConfig.sol` (new): the `Config` struct (relocated from `IAdaptiveCurveIrm`) and `getConfig()`.
+- `IAdaptiveCurveIrm.sol`: drops the per-deployment curve getters and `getConfig()`; adds `OWNER()`, the `marketConfig(Id)` getter (returns `IMarketConfig`), and `setConfig(Id, IMarketConfig)`. `MORPHO()`, `rateAtTarget(Id)`, and the `IIrm` surface (`borrowRate`/`borrowRateView`) are unchanged.
+- `IMarketConfigFactory.sol` (new): `isValidDeployment(address)`, `createConfig(Config)` (returns `IMarketConfig`).
+- `ErrorsLib.sol`: keeps `ZERO_ADDRESS`/`NOT_MORPHO` and the per-parameter validation errors (now thrown by `MarketConfig`); adds `NOT_OWNER`, `CONFIG_NOT_SET`.
+- `AdaptiveCurveIrmLib.sol` (periphery): resolves the market's config from the IRM registry (`marketConfig(id)`) and reads it live (tracks the currently-registered config) instead of `ConstantsLib`, applying the same clamp; reverts `config not set` when none is registered. Public surface unchanged, but behavior is now market-specific per the registered `Config` — consumers that assumed the upstream constants must re-check.
 - `ConstantsLib.sol`: moved from `src/` to `test/`, where it is the canonical default config the tests build on.
 
 ## Compatibility
 
-- **Drop-in at the call site:** the `IIrm` surface keeps upstream signatures and semantics; Morpho and integrators are unaffected.
-- **Not drop-in at deployment:** the constructor is `(address morpho, Config cfg)`, and curve behavior is per-deployment, not the upstream constants.
-- **Reparametrization is an upgrade, not a setter:** the only way to change a live deployment's params is upgrading the impl behind the proxy, which can move the charged rate discontinuously on the next interaction (see the "Upgradable" section in SPECIFICATION.md).
+- **Drop-in at the call site:** the `IIrm` surface keeps upstream signatures and semantics; Morpho and integrators are unaffected (a market must have a config registered before it is used).
+- **Not drop-in at deployment:** the IRM constructor is `(address morpho, address owner)`; curve params live in factory-deployed `MarketConfig`s, and behavior is per-market.
+- **Reparametrization is a re-pointing, not a setter:** the owner points a market at a new `MarketConfig` via `setConfig`, which can move the charged rate discontinuously on the next interaction (see the "Reparametrization" section in SPECIFICATION.md). Changing the owner itself is a proxy upgrade.
 - **Unchanged:** MIT, `pragma 0.8.19`, `evm_version = "paris"`.
 
 ## Tests and verification
 
-- Foundry: upstream tests are retained and adapted to the `Config` constructor (default from `test/ConstantsLib.sol`); `testConstants` is dropped (now covered by constructor validation). Fork tests add deployment/validation, the cap, config-space fuzzing, a config-parametrized curve oracle, curve edge cases, and the proxy/upgrade suite (against a minimal test-only ERC-1967 proxy).
-- Certora: `certora/confs/{BorrowRateView,ExpectedMarketBalances}.conf` prove the periphery equivalent to the contract (values and reverts); `MaxBorrowRate.conf` proves the cap bounds both `borrowRate` and `borrowRateView` when enabled; `RateAtTargetBand.conf` proves `borrowRate` keeps `rateAtTarget[id]` within `[MIN_RATE_AT_TARGET, MAX_RATE_AT_TARGET]`. Specs/harness updated for instance-read params; confs pin `solc-0.8.19`.
+- Foundry: upstream tests are retained and adapted to the per-market-config model (the IRM is deployed with a factory and owner, and a default config from `test/ConstantsLib.sol` is set per market); `testConstants` is dropped (now covered by `MarketConfig` validation). Fork tests add config validation (`MarketConfigTest`), the permissionless factory + provenance record (`MarketConfigFactoryTest`), `setConfig` access control, the cap, config-space fuzzing, a config-parametrized curve oracle, curve edge cases, reparametrization-by-re-pointing dynamics (`AdaptiveCurveIrmReparamTest`), and the proxy suite (immutables read through the proxy, config + `rateAtTarget` persist across upgrade, owner changed by upgrade, slot non-collision) against a minimal test-only ERC-1967 proxy (`AdaptiveCurveIrmProxyTest`).
+- Certora: `certora/confs/{BorrowRateView,ExpectedMarketBalances}.conf` prove the periphery equivalent to the contract (values and reverts); `MaxBorrowRate.conf` proves the cap bounds both `borrowRate` and `borrowRateView` when enabled; `RateAtTargetBand.conf` proves `borrowRate` keeps `rateAtTarget[id]` within `[minRateAtTarget, maxRateAtTarget]`. Specs/harness read the curve params from a linked `MarketConfig`; confs pin `solc-0.8.19`.

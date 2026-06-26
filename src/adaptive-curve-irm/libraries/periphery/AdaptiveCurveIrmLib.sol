@@ -3,9 +3,11 @@ pragma solidity ^0.8.0;
 
 import {Id, Market, IMorpho} from "../../../../lib/morpho-blue/src/interfaces/IMorpho.sol";
 import {IAdaptiveCurveIrm} from "../../interfaces/IAdaptiveCurveIrm.sol";
+import {IMarketConfig} from "../../interfaces/IMarketConfig.sol";
 
 import {ExpLib} from "../ExpLib.sol";
 import {UtilsLib} from "../UtilsLib.sol";
+import {ErrorsLib} from "../ErrorsLib.sol";
 import {MathLib, WAD_INT as WAD} from "../MathLib.sol";
 import {SharesMathLib} from "../../../../lib/morpho-blue/src/libraries/SharesMathLib.sol";
 import {MathLib as MorphoMathLib} from "../../../../lib/morpho-blue/src/libraries/MathLib.sol";
@@ -72,9 +74,11 @@ library AdaptiveCurveIrmLib {
         view
         returns (uint256, int256)
     {
-        // Curve parameters are immutable per implementation, read from the IRM instance so this matches whatever
-        // implementation the (possibly proxied) `adaptiveCurveIrm` currently points to.
-        IAdaptiveCurveIrm.Config memory p = IAdaptiveCurveIrm(adaptiveCurveIrm).getConfig();
+        // Curve parameters live in the per-market MarketConfig. Resolve it from the IRM and read it through an
+        // external static call, mirroring the IRM. A market with no config set cannot be priced.
+        IMarketConfig config = IAdaptiveCurveIrm(adaptiveCurveIrm).marketConfig(id);
+        require(address(config) != address(0), ErrorsLib.CONFIG_NOT_SET);
+        IMarketConfig.Config memory p = config.getConfig();
 
         int256 err = _err(market, p.targetUtilization);
 

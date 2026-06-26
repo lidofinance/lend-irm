@@ -4,15 +4,38 @@ using AdaptiveCurveIrm as AdaptiveCurveIrm;
 using AdaptiveCurveIrmLibHarness as AdaptiveCurveIrmLibHarness;
 using Morpho as Morpho;
 
+// Both paths reach the IRM's borrow rate, which reads the market's curve params from its MarketConfig via an external
+// `getConfig()` static call (the config address resolved from the `marketConfig` registry). `getConfig()` is
+// summarized to a single ghost-backed Config and the registry/state reads are dispatched to the linked IRM, so the
+// lib reads the same state and params as the contract.
+ghost int256 g_curveSteepness;
+ghost int256 g_adjustmentSpeed;
+ghost int256 g_targetUtilization;
+ghost int256 g_initialRateAtTarget;
+ghost int256 g_minRateAtTarget;
+ghost int256 g_maxRateAtTarget;
+ghost uint256 g_maxBorrowRate;
+
+function getConfigSummary() returns IMarketConfig.Config {
+    IMarketConfig.Config c;
+    require c.curveSteepness == g_curveSteepness;
+    require c.adjustmentSpeed == g_adjustmentSpeed;
+    require c.targetUtilization == g_targetUtilization;
+    require c.initialRateAtTarget == g_initialRateAtTarget;
+    require c.minRateAtTarget == g_minRateAtTarget;
+    require c.maxRateAtTarget == g_maxRateAtTarget;
+    require c.maxBorrowRate == g_maxBorrowRate;
+    return c;
+}
+
 methods {
     function AdaptiveCurveIrmLibHarness.toId(AdaptiveCurveIrm.MarketParams) external returns (AdaptiveCurveIrm.Id) envfree;
 
     function _.rateAtTarget(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
+    function _.marketConfig(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
     function _.market(Morpho.Id) external => DISPATCHER(true);
     function _.borrowRateView(Morpho.MarketParams, Morpho.Market) external => DISPATCHER(true);
-    // The periphery lib reads the curve params from the IRM instance via getConfig(), so it must resolve to the
-    // linked AdaptiveCurveIrm rather than be havoc'd.
-    function _.getConfig() external => DISPATCHER(true);
+    function _.getConfig() external => getConfigSummary() expect IMarketConfig.Config;
 }
 
 // Rule: AdaptiveCurveIrmBalancesLib behaves identically to MorphoBalancesLib
