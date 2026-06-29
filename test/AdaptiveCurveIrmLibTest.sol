@@ -6,8 +6,8 @@ import {MarketConfigFactory} from "../src/adaptive-curve-irm/MarketConfigFactory
 import {IMarketConfig} from "../src/adaptive-curve-irm/interfaces/IMarketConfig.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 import "../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
-import "../lib/morpho-blue/src/interfaces/IMorpho.sol";
-import {MorphoBalancesLib} from "../lib/morpho-blue/src/libraries/periphery/MorphoBalancesLib.sol";
+import "../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {MorphoBalancesLib} from "../lib/lido-lend/src/libraries/periphery/MorphoBalancesLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
 

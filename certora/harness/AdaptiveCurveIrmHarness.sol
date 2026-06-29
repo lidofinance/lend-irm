@@ -2,8 +2,8 @@
 pragma solidity 0.8.35;
 
 import {AdaptiveCurveIrm} from "../../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
-import {Id, MarketParams} from "../../lib/morpho-blue/src/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "../../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
+import {Id, MarketParams} from "../../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {MarketParamsLib} from "../../lib/lido-lend/src/libraries/MarketParamsLib.sol";
 
 // Verifies AdaptiveCurveIrm through a subclass. The curve parameters live in a per-market MarketConfig that the IRM
 // reads through an external `getConfig()` static call; a spec links a MarketConfig, requires it is the one registered

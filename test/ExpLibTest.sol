@@ -5,7 +5,7 @@ import {MathLib, WAD_INT} from "../src/adaptive-curve-irm/libraries/MathLib.sol"
 import {ExpLib} from "../src/adaptive-curve-irm/libraries/ExpLib.sol";
 import {wadExp} from "../lib/solmate/src/utils/SignedWadMath.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
-import {MathLib as MorphoMathLib} from "../lib/morpho-blue/src/libraries/MathLib.sol";
+import {MathLib as MorphoMathLib} from "../lib/lido-lend/src/libraries/MathLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
