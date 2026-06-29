@@ -3,6 +3,7 @@ pragma solidity 0.8.19;
 
 import {IIrm} from "../../lib/morpho-blue/src/interfaces/IIrm.sol";
 import {IAdaptiveCurveIrm} from "./interfaces/IAdaptiveCurveIrm.sol";
+import {IMarketConfig} from "./interfaces/IMarketConfig.sol";
 
 import {UtilsLib} from "./libraries/UtilsLib.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
@@ -31,93 +32,44 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     address public immutable MORPHO;
 
     /// @inheritdoc IAdaptiveCurveIrm
-    int256 public immutable CURVE_STEEPNESS;
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    int256 public immutable ADJUSTMENT_SPEED;
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    int256 public immutable TARGET_UTILIZATION;
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    int256 public immutable INITIAL_RATE_AT_TARGET;
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    int256 public immutable MIN_RATE_AT_TARGET;
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    int256 public immutable MAX_RATE_AT_TARGET;
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    uint256 public immutable MAX_BORROW_RATE;
-
-    /* CONSTANTS */
-
-    /// @dev Maximum curve steepness = 100 (WAD-scaled ratio).
-    int256 private constant MAX_CURVE_STEEPNESS = 100 ether;
-
-    /// @dev Maximum adjustment speed = 10000/year (WAD-scaled, per second).
-    int256 private constant MAX_ADJUSTMENT_SPEED = 10_000 ether / int256(365 days);
-
-    /// @dev Maximum rate at target = 10000/year = 1000000%/year (WAD-scaled, per second).
-    int256 private constant MAX_RATE_AT_TARGET_LIMIT = 10_000 ether / int256(365 days);
+    /// @dev Immutable, so the constructor writes no storage and the implementation is safe behind a proxy with no
+    /// initializer. Changing the owner means deploying a new implementation and upgrading the proxy.
+    address public immutable OWNER;
 
     /* STORAGE */
 
     /// @inheritdoc IAdaptiveCurveIrm
     mapping(Id => int256) public rateAtTarget;
 
+    /// @inheritdoc IAdaptiveCurveIrm
+    mapping(Id => IMarketConfig) public marketConfig;
+
+    /* MODIFIERS */
+
+    modifier onlyOwner() {
+        require(msg.sender == OWNER, ErrorsLib.NOT_OWNER);
+        _;
+    }
+
     /* CONSTRUCTOR */
 
     /// @notice Constructor.
     /// @param morpho The address of Morpho.
-    /// @param cfg The curve parameters, lifted to immutables so a single implementation can be deployed behind a
-    /// proxy and reparametrized by upgrading to a new implementation while the stored `rateAtTarget` persists.
-    constructor(address morpho, Config memory cfg) {
-        require(morpho != address(0), ErrorsLib.ZERO_ADDRESS);
-        _validateConfig(cfg);
+    /// @param owner The address allowed to set per-market configs.
+    constructor(address morpho, address owner) {
+        require(morpho != address(0) && owner != address(0), ErrorsLib.ZERO_ADDRESS);
 
         MORPHO = morpho;
-        CURVE_STEEPNESS = cfg.curveSteepness;
-        ADJUSTMENT_SPEED = cfg.adjustmentSpeed;
-        TARGET_UTILIZATION = cfg.targetUtilization;
-        INITIAL_RATE_AT_TARGET = cfg.initialRateAtTarget;
-        MIN_RATE_AT_TARGET = cfg.minRateAtTarget;
-        MAX_RATE_AT_TARGET = cfg.maxRateAtTarget;
-        MAX_BORROW_RATE = cfg.maxBorrowRate;
+        OWNER = owner;
     }
 
-    /// @dev Reverts unless `cfg` is a valid curve configuration, with a per-parameter error message.
-    function _validateConfig(Config memory cfg) private pure {
-        require(
-            cfg.curveSteepness >= WAD && cfg.curveSteepness <= MAX_CURVE_STEEPNESS, ErrorsLib.INVALID_CURVE_STEEPNESS
-        );
-        require(
-            cfg.adjustmentSpeed >= 0 && cfg.adjustmentSpeed <= MAX_ADJUSTMENT_SPEED, ErrorsLib.INVALID_ADJUSTMENT_SPEED
-        );
-        require(cfg.targetUtilization > 0 && cfg.targetUtilization < WAD, ErrorsLib.INVALID_TARGET_UTILIZATION);
-        require(
-            cfg.minRateAtTarget > 0 && cfg.maxRateAtTarget >= cfg.minRateAtTarget
-                && cfg.maxRateAtTarget <= MAX_RATE_AT_TARGET_LIMIT,
-            ErrorsLib.INVALID_RATE_BOUNDS
-        );
-        require(
-            cfg.initialRateAtTarget >= cfg.minRateAtTarget && cfg.initialRateAtTarget <= cfg.maxRateAtTarget,
-            ErrorsLib.INVALID_INITIAL_RATE
-        );
-    }
+    /* CONFIG MANAGEMENT */
 
     /// @inheritdoc IAdaptiveCurveIrm
-    function getConfig() external view returns (Config memory) {
-        return Config({
-            curveSteepness: CURVE_STEEPNESS,
-            adjustmentSpeed: ADJUSTMENT_SPEED,
-            targetUtilization: TARGET_UTILIZATION,
-            initialRateAtTarget: INITIAL_RATE_AT_TARGET,
-            minRateAtTarget: MIN_RATE_AT_TARGET,
-            maxRateAtTarget: MAX_RATE_AT_TARGET,
-            maxBorrowRate: MAX_BORROW_RATE
-        });
+    function setConfig(Id id, IMarketConfig config) external onlyOwner {
+        marketConfig[id] = config;
+
+        emit ConfigSet(id, address(config));
     }
 
     /* BORROW RATES */
@@ -147,12 +99,16 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     /// @dev Returns avgRate and endRateAtTarget.
     /// @dev Assumes that the inputs `marketParams` and `id` match.
     function _borrowRate(Id id, Market memory market) private view returns (uint256, int256) {
+        IMarketConfig config = marketConfig[id];
+        require(address(config) != address(0), ErrorsLib.CONFIG_NOT_SET);
+        IMarketConfig.Config memory cfg = config.getConfig();
+
         // Safe "unchecked" cast because the utilization is smaller than 1 (scaled by WAD).
         int256 utilization =
             int256(market.totalSupplyAssets > 0 ? market.totalBorrowAssets.wDivDown(market.totalSupplyAssets) : 0);
 
-        int256 errNormFactor = utilization > TARGET_UTILIZATION ? WAD - TARGET_UTILIZATION : TARGET_UTILIZATION;
-        int256 err = (utilization - TARGET_UTILIZATION).wDivToZero(errNormFactor);
+        int256 errNormFactor = utilization > cfg.targetUtilization ? WAD - cfg.targetUtilization : cfg.targetUtilization;
+        int256 err = (utilization - cfg.targetUtilization).wDivToZero(errNormFactor);
 
         int256 startRateAtTarget = rateAtTarget[id];
 
@@ -161,12 +117,12 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
         if (startRateAtTarget == 0) {
             // First interaction.
-            avgRateAtTarget = INITIAL_RATE_AT_TARGET;
-            endRateAtTarget = INITIAL_RATE_AT_TARGET;
+            avgRateAtTarget = cfg.initialRateAtTarget;
+            endRateAtTarget = cfg.initialRateAtTarget;
         } else {
             // The speed is assumed constant between two updates, but it is in fact not constant because of interest.
             // So the rate is always underestimated.
-            int256 speed = ADJUSTMENT_SPEED.wMulToZero(err);
+            int256 speed = cfg.adjustmentSpeed.wMulToZero(err);
             // market.lastUpdate != 0 because it is not the first interaction with this market.
             // Safe "unchecked" cast because block.timestamp - market.lastUpdate <= block.timestamp <= type(int256).max.
             int256 elapsed = int256(block.timestamp - market.lastUpdate);
@@ -190,18 +146,18 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
                 // With N = 2:
                 // avg ~= curve([(startRateAtTarget + endRateAtTarget)/2 + startRateAtTarget*exp(speed*T/2)] / 2, err)
                 // avg ~= curve([startRateAtTarget + endRateAtTarget + 2*startRateAtTarget*exp(speed*T/2)] / 4, err)
-                endRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation);
-                int256 midRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation / 2);
+                endRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation, cfg);
+                int256 midRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation / 2, cfg);
                 avgRateAtTarget = (startRateAtTarget + endRateAtTarget + 2 * midRateAtTarget) / 4;
             }
         }
 
         // Safe "unchecked" cast because avgRateAtTarget >= 0.
-        uint256 rate = uint256(_curve(avgRateAtTarget, err));
+        uint256 rate = uint256(_curve(avgRateAtTarget, err, cfg.curveSteepness));
 
-        // Hard cap: clamp the charged rate to MAX_BORROW_RATE, leaving endRateAtTarget untouched. Adaptation is
+        // Hard cap: clamp the charged rate to maxBorrowRate, leaving endRateAtTarget untouched. Adaptation is
         // err-driven, not rate-driven, so the state machine is unchanged and only the reported rate is bounded.
-        if (MAX_BORROW_RATE != 0 && rate > MAX_BORROW_RATE) rate = MAX_BORROW_RATE;
+        if (cfg.maxBorrowRate != 0 && rate > cfg.maxBorrowRate) rate = cfg.maxBorrowRate;
 
         return (rate, endRateAtTarget);
     }
@@ -210,17 +166,22 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     /// The formula of the curve is the following:
     /// r = ((1-1/C)*err + 1) * rateAtTarget if err < 0
     ///     ((C-1)*err + 1) * rateAtTarget else.
-    function _curve(int256 _rateAtTarget, int256 err) private view returns (int256) {
+    function _curve(int256 _rateAtTarget, int256 err, int256 curveSteepness) private pure returns (int256) {
         // Non negative because 1 - 1/C >= 0, C - 1 >= 0.
-        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(CURVE_STEEPNESS) : CURVE_STEEPNESS - WAD;
+        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(curveSteepness) : curveSteepness - WAD;
         // Non negative if _rateAtTarget >= 0 because if err < 0, coeff <= 1.
         return (coeff.wMulToZero(err) + WAD).wMulToZero(_rateAtTarget);
     }
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
     /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation) private view returns (int256) {
-        // Non negative because MIN_RATE_AT_TARGET > 0.
-        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(MIN_RATE_AT_TARGET, MAX_RATE_AT_TARGET);
+    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, IMarketConfig.Config memory cfg)
+        private
+        pure
+        returns (int256)
+    {
+        // Non negative because minRateAtTarget > 0.
+        return
+            startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(cfg.minRateAtTarget, cfg.maxRateAtTarget);
     }
 }
