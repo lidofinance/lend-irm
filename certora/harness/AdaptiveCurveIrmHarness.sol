@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.19;
+pragma solidity 0.8.35;
 
 import {AdaptiveCurveIrm} from "../../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
 import {Id, MarketParams} from "../../lib/morpho-blue/src/interfaces/IMorpho.sol";

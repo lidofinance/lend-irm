@@ -2,7 +2,7 @@
 
 using AdaptiveCurveIrm as AdaptiveCurveIrm;
 using AdaptiveCurveIrmLibHarness as AdaptiveCurveIrmLibHarness;
-using Morpho as Morpho;
+using LidoLend as Morpho;
 
 // Both paths reach the IRM's borrow rate, which reads the market's curve params from its MarketConfig via an external
 // `getConfig()` static call (the config address resolved from the `marketConfig` registry). `getConfig()` is

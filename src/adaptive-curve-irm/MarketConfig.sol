@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.19;
+pragma solidity 0.8.35;
 
 import {IMarketConfig} from "./interfaces/IMarketConfig.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";

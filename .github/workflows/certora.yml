@@ -31,11 +31,11 @@ jobs:
       - name: Install certora
         run: pip install certora-cli
 
-      - name: Install solc (0.8.19)
+      - name: Install solc (0.8.35)
         run: |
-          wget https://github.com/ethereum/solidity/releases/download/v0.8.19/solc-static-linux
+          wget https://github.com/ethereum/solidity/releases/download/v0.8.35/solc-static-linux
           chmod +x solc-static-linux
-          sudo mv solc-static-linux /usr/local/bin/solc-0.8.19
+          sudo mv solc-static-linux /usr/local/bin/solc-0.8.35
 
       - name: Verify ${{ matrix.conf }}
         run: certoraRun certora/confs/${{ matrix.conf }}.conf

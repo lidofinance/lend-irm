@@ -3,18 +3,21 @@ src = "src"
 out = "out"
 test = "test"
 libs = ["lib"]
+names = true
+sizes = true
 via_ir = true
 optimizer = true
-optimizer_runs = 999999
+optimizer_runs = 200
 bytecode_hash = "none"
+solc = "0.8.35"
 evm_version = "paris"
 
 [fuzz]
 runs = 4096
 
 [invariant]
-runs = 32
-depth = 1024
+runs = 1024
+depth = 32
 fail_on_revert = true
 
 [fmt]
@@ -25,6 +28,11 @@ exclude_lints = [
     "unsafe-typecast",
     "mixed-case-function",
     "unaliased-plain-import",
+    "asm-keccak256",
+    "unwrapped-modifier-logic",
+]
+ignore = [
+    'test/**/*.sol',
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
