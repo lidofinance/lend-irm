@@ -2,8 +2,8 @@
 pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
-import {MarketConfigFactory} from "../src/adaptive-curve-irm/MarketConfigFactory.sol";
-import {IMarketConfig} from "../src/adaptive-curve-irm/interfaces/IMarketConfig.sol";
+import {AdaptiveCurveConfigFactory} from "../src/adaptive-curve-irm/AdaptiveCurveConfigFactory.sol";
+import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
@@ -66,32 +66,33 @@ contract TestERC1967Proxy {
     receive() external payable {}
 }
 
-/// The IRM is meant to run behind a proxy. Its only immutables (`MORPHO`, `OWNER`) are baked into the implementation
-/// bytecode and read under `delegatecall`; its storage (`rateAtTarget`, `marketConfig`) lives in the proxy. Because
-/// the owner is immutable, no initializer is needed and the constructor writes no storage. Changing the owner (or the
-/// logic) is a proxy upgrade to a freshly-constructed implementation; the proxy's storage persists.
+/// The IRM is meant to run behind a proxy. Its only immutable (`MORPHO`) is baked into the implementation bytecode and
+/// read under `delegatecall`; its storage (`rateAtTarget`, `config`, `owner`) lives in the proxy. The owner is
+/// set once through the proxy via `initialize` and rotated with `transferOwnership`. A logic upgrade to a
+/// freshly-constructed implementation preserves the proxy's storage, including the owner.
 contract AdaptiveCurveIrmProxyTest is Test {
     using MarketParamsLib for MarketParams;
 
     uint256 internal constant SUPPLY = 1_000_000 ether;
     uint256 internal constant TARGET = 0.9 ether;
 
-    MarketConfigFactory internal factory;
+    AdaptiveCurveConfigFactory internal factory;
     MarketParams internal params;
     Id internal id;
 
     function setUp() public {
-        factory = new MarketConfigFactory();
+        factory = new AdaptiveCurveConfigFactory();
         vm.warp(90 days);
     }
 
-    /// The immutables are readable through the proxy (delegatecall reads the impl bytecode), and a config set through
-    /// the proxy lands in proxy storage and prices the market.
-    function test_immutablesReadableThroughProxy() public {
+    /// MORPHO (immutable) is readable through the proxy (delegatecall reads the impl bytecode); the owner (storage) is
+    /// the one set via `initialize` through the proxy; and a config set through the proxy lands in proxy storage and
+    /// prices the market.
+    function test_morphoAndOwnerThroughProxy() public {
         address proxy = _wiredProxy(address(this));
 
         assertEq(AdaptiveCurveIrm(proxy).MORPHO(), address(this), "MORPHO through proxy");
-        assertEq(AdaptiveCurveIrm(proxy).OWNER(), address(this), "OWNER through proxy");
+        assertEq(AdaptiveCurveIrm(proxy).owner(), address(this), "owner through proxy");
 
         Market memory market = _market(TARGET);
         assertEq(
@@ -101,37 +102,37 @@ contract AdaptiveCurveIrmProxyTest is Test {
         );
     }
 
-    /// A logic upgrade (same owner) preserves marketConfig and rateAtTarget; pricing is unchanged.
-    function test_upgrade_logicSwap_preservesConfigAndRateAtTarget() public {
+    /// A logic upgrade preserves config, rateAtTarget, and the owner; pricing is unchanged.
+    function test_upgrade_logicSwap_preservesState() public {
         address proxy = _wiredProxy(address(this));
         _adaptUp(proxy);
 
-        address configBefore = address(AdaptiveCurveIrm(proxy).marketConfig(id));
+        address configBefore = address(AdaptiveCurveIrm(proxy).config(id));
         int256 rateBefore = AdaptiveCurveIrm(proxy).rateAtTarget(id);
         assertGt(rateBefore, int256(0), "rateAtTarget seeded");
 
-        TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this), address(this))));
+        TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this))));
 
-        assertEq(
-            address(AdaptiveCurveIrm(proxy).marketConfig(id)), configBefore, "marketConfig persisted across upgrade"
-        );
+        assertEq(address(AdaptiveCurveIrm(proxy).config(id)), configBefore, "config persisted across upgrade");
         assertEq(AdaptiveCurveIrm(proxy).rateAtTarget(id), rateBefore, "rateAtTarget persisted across upgrade");
+        assertEq(AdaptiveCurveIrm(proxy).owner(), address(this), "owner (storage) persisted across upgrade");
     }
 
-    /// Changing the owner is an upgrade to an implementation constructed with the new owner; state persists.
-    function test_upgrade_changesOwner() public {
+    /// The owner is rotated through the proxy via transferOwnership; no upgrade needed, and state persists.
+    function test_transferOwnershipThroughProxy() public {
         address proxy = _wiredProxy(address(this));
         _adaptUp(proxy);
         address newOwner = makeAddr("newOwner");
 
         int256 rateBefore = AdaptiveCurveIrm(proxy).rateAtTarget(id);
         assertGt(rateBefore, int256(0), "rateAtTarget seeded");
-        TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this), newOwner)));
 
-        assertEq(AdaptiveCurveIrm(proxy).OWNER(), newOwner, "owner changed by the upgrade");
+        AdaptiveCurveIrm(proxy).transferOwnership(newOwner);
+
+        assertEq(AdaptiveCurveIrm(proxy).owner(), newOwner, "owner rotated through the proxy");
         assertEq(AdaptiveCurveIrm(proxy).rateAtTarget(id), rateBefore, "rateAtTarget persisted");
 
-        IMarketConfig freshConfig = factory.createConfig(_defaultConfig());
+        IAdaptiveCurveConfig freshConfig = factory.createConfig(_defaultConfig());
 
         // The old owner (this) can no longer set configs.
         vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
@@ -140,7 +141,7 @@ contract AdaptiveCurveIrmProxyTest is Test {
         // The new owner can.
         vm.prank(newOwner);
         AdaptiveCurveIrm(proxy).setConfig(id, freshConfig);
-        assertEq(address(AdaptiveCurveIrm(proxy).marketConfig(id)), address(freshConfig), "new owner set the config");
+        assertEq(address(AdaptiveCurveIrm(proxy).config(id)), address(freshConfig), "new owner set the config");
     }
 
     /// The EIP-1967 impl/admin pointers live in their own slots, never touching rateAtTarget (slot 0).
@@ -151,7 +152,7 @@ contract AdaptiveCurveIrmProxyTest is Test {
         assertGt(seededRate, int256(0), "rateAtTarget seeded in slot 0");
 
         TestERC1967Proxy(payable(proxy)).setAdmin(address(0xADA));
-        TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this), address(this))));
+        TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this))));
 
         assertEq(TestERC1967Proxy(payable(proxy)).admin(), address(0xADA), "admin slot written");
         assertEq(AdaptiveCurveIrm(proxy).rateAtTarget(id), seededRate, "rateAtTarget (slot 0) intact after slot writes");
@@ -159,8 +160,8 @@ contract AdaptiveCurveIrmProxyTest is Test {
 
     /* HELPERS */
 
-    function _defaultConfig() internal pure returns (IMarketConfig.Config memory) {
-        return IMarketConfig.Config({
+    function _defaultConfig() internal pure returns (IAdaptiveCurveConfig.Params memory) {
+        return IAdaptiveCurveConfig.Params({
             curveSteepness: int256(1.5 ether),
             adjustmentSpeed: int256(20 ether) / int256(365 days),
             targetUtilization: int256(TARGET),
@@ -171,9 +172,11 @@ contract AdaptiveCurveIrmProxyTest is Test {
         });
     }
 
-    /// @dev A proxy over a fresh impl (morpho == this, owner == `owner_`), wired to a market with a config set.
+    /// @dev A proxy over a fresh impl (morpho == this), initialized with owner `owner_` through the proxy, wired to a
+    /// market with a config set.
     function _wiredProxy(address owner_) internal returns (address proxy) {
-        proxy = address(new TestERC1967Proxy(address(new AdaptiveCurveIrm(address(this), owner_))));
+        proxy = address(new TestERC1967Proxy(address(new AdaptiveCurveIrm(address(this)))));
+        AdaptiveCurveIrm(proxy).initialize(owner_);
         params = MarketParams({
             loanToken: address(0xA11CE),
             collateralToken: address(0xB0B),
@@ -182,8 +185,8 @@ contract AdaptiveCurveIrmProxyTest is Test {
             lltv: 0.8 ether
         });
         id = params.id();
-        IMarketConfig config = factory.createConfig(_defaultConfig());
-        // owner_ must be this for the setUp path; tests that need a different owner upgrade afterwards.
+        IAdaptiveCurveConfig config = factory.createConfig(_defaultConfig());
+        // owner_ must be this to set the config here; tests needing a different owner rotate afterwards.
         if (owner_ == address(this)) AdaptiveCurveIrm(proxy).setConfig(id, config);
     }
 

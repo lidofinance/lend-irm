@@ -3,7 +3,7 @@ pragma solidity 0.8.35;
 
 import {IIrm} from "../../lib/lido-lend/src/interfaces/IIrm.sol";
 import {IAdaptiveCurveIrm} from "./interfaces/IAdaptiveCurveIrm.sol";
-import {IMarketConfig} from "./interfaces/IMarketConfig.sol";
+import {IAdaptiveCurveConfig} from "./interfaces/IAdaptiveCurveConfig.sol";
 
 import {UtilsLib} from "./libraries/UtilsLib.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
@@ -31,45 +31,63 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     /// @inheritdoc IAdaptiveCurveIrm
     address public immutable MORPHO;
 
-    /// @inheritdoc IAdaptiveCurveIrm
-    /// @dev Immutable, so the constructor writes no storage and the implementation is safe behind a proxy with no
-    /// initializer. Changing the owner means deploying a new implementation and upgrading the proxy.
-    address public immutable OWNER;
-
     /* STORAGE */
 
     /// @inheritdoc IAdaptiveCurveIrm
     mapping(Id => int256) public rateAtTarget;
 
     /// @inheritdoc IAdaptiveCurveIrm
-    mapping(Id => IMarketConfig) public marketConfig;
+    mapping(Id => IAdaptiveCurveConfig) public config;
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    address public owner;
 
     /* MODIFIERS */
 
     modifier onlyOwner() {
-        require(msg.sender == OWNER, ErrorsLib.NOT_OWNER);
+        require(msg.sender == owner, ErrorsLib.NOT_OWNER);
         _;
     }
 
     /* CONSTRUCTOR */
 
-    /// @notice Constructor.
     /// @param morpho The address of Morpho.
-    /// @param owner The address allowed to set per-market configs.
-    constructor(address morpho, address owner) {
-        require(morpho != address(0) && owner != address(0), ErrorsLib.ZERO_ADDRESS);
+    /// @dev Sets `MORPHO` only; `owner` is storage, set post-deployment via `initialize`.
+    constructor(address morpho) {
+        require(morpho != address(0), ErrorsLib.ZERO_ADDRESS);
 
         MORPHO = morpho;
-        OWNER = owner;
+    }
+
+    /* OWNERSHIP MANAGEMENT */
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    function initialize(address initialOwner) external {
+        require(owner == address(0), ErrorsLib.ALREADY_INITIALIZED);
+        require(initialOwner != address(0), ErrorsLib.ZERO_ADDRESS);
+
+        owner = initialOwner;
+
+        emit OwnershipTransferred(address(0), initialOwner);
+    }
+
+    /// @inheritdoc IAdaptiveCurveIrm
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), ErrorsLib.ZERO_ADDRESS);
+
+        address previousOwner = owner;
+        owner = newOwner;
+
+        emit OwnershipTransferred(previousOwner, newOwner);
     }
 
     /* CONFIG MANAGEMENT */
 
     /// @inheritdoc IAdaptiveCurveIrm
-    function setConfig(Id id, IMarketConfig config) external onlyOwner {
-        marketConfig[id] = config;
+    function setConfig(Id id, IAdaptiveCurveConfig newConfig) external onlyOwner {
+        config[id] = newConfig;
 
-        emit ConfigSet(id, address(config));
+        emit ConfigSet(id, address(newConfig));
     }
 
     /* BORROW RATES */
@@ -99,9 +117,9 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     /// @dev Returns avgRate and endRateAtTarget.
     /// @dev Assumes that the inputs `marketParams` and `id` match.
     function _borrowRate(Id id, Market memory market) private view returns (uint256, int256) {
-        IMarketConfig config = marketConfig[id];
-        require(address(config) != address(0), ErrorsLib.CONFIG_NOT_SET);
-        IMarketConfig.Config memory cfg = config.getConfig();
+        IAdaptiveCurveConfig curveConfig = config[id];
+        require(address(curveConfig) != address(0), ErrorsLib.CONFIG_NOT_SET);
+        IAdaptiveCurveConfig.Params memory cfg = curveConfig.getCurveParams();
 
         // Safe "unchecked" cast because the utilization is smaller than 1 (scaled by WAD).
         int256 utilization =
@@ -175,7 +193,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
     /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, IMarketConfig.Config memory cfg)
+    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, IAdaptiveCurveConfig.Params memory cfg)
         private
         pure
         returns (int256)

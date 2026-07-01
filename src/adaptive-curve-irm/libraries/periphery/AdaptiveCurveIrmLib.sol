@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Id, Market, IMorpho} from "../../../../lib/lido-lend/src/interfaces/IMorpho.sol";
 import {IAdaptiveCurveIrm} from "../../interfaces/IAdaptiveCurveIrm.sol";
-import {IMarketConfig} from "../../interfaces/IMarketConfig.sol";
+import {IAdaptiveCurveConfig} from "../../interfaces/IAdaptiveCurveConfig.sol";
 
 import {ExpLib} from "../ExpLib.sol";
 import {UtilsLib} from "../UtilsLib.sol";
@@ -74,11 +74,11 @@ library AdaptiveCurveIrmLib {
         view
         returns (uint256, int256)
     {
-        // Curve parameters live in the per-market MarketConfig. Resolve it from the IRM and read it through an
+        // Curve parameters live in the per-market AdaptiveCurveConfig. Resolve it from the IRM and read it through an
         // external static call, mirroring the IRM. A market with no config set cannot be priced.
-        IMarketConfig config = IAdaptiveCurveIrm(adaptiveCurveIrm).marketConfig(id);
+        IAdaptiveCurveConfig config = IAdaptiveCurveIrm(adaptiveCurveIrm).config(id);
         require(address(config) != address(0), ErrorsLib.CONFIG_NOT_SET);
-        IMarketConfig.Config memory p = config.getConfig();
+        IAdaptiveCurveConfig.Params memory p = config.getCurveParams();
 
         int256 err = _err(market, p.targetUtilization);
 
@@ -118,10 +118,8 @@ library AdaptiveCurveIrmLib {
                 // With N = 2:
                 // avg ~= curve([(startRateAtTarget + endRateAtTarget)/2 + startRateAtTarget*exp(speed*T/2)] / 2, err)
                 // avg ~= curve([startRateAtTarget + endRateAtTarget + 2*startRateAtTarget*exp(speed*T/2)] / 4, err)
-                endRateAtTarget =
-                    _newRateAtTarget(startRateAtTarget, linearAdaptation, p.minRateAtTarget, p.maxRateAtTarget);
-                int256 midRateAtTarget =
-                    _newRateAtTarget(startRateAtTarget, linearAdaptation / 2, p.minRateAtTarget, p.maxRateAtTarget);
+                endRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation, p);
+                int256 midRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation / 2, p);
                 avgRateAtTarget = (startRateAtTarget + endRateAtTarget + 2 * midRateAtTarget) / 4;
             }
         }
@@ -157,13 +155,12 @@ library AdaptiveCurveIrmLib {
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
     /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(
-        int256 startRateAtTarget,
-        int256 linearAdaptation,
-        int256 minRateAtTarget,
-        int256 maxRateAtTarget
-    ) internal pure returns (int256) {
+    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, IAdaptiveCurveConfig.Params memory p)
+        internal
+        pure
+        returns (int256)
+    {
         // Non negative because minRateAtTarget > 0.
-        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(minRateAtTarget, maxRateAtTarget);
+        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(p.minRateAtTarget, p.maxRateAtTarget);
     }
 }

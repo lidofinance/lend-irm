@@ -4,9 +4,9 @@ using AdaptiveCurveIrm as AdaptiveCurveIrm;
 using AdaptiveCurveIrmLibHarness as AdaptiveCurveIrmLibHarness;
 using LidoLend as Morpho;
 
-// Both paths reach the IRM's borrow rate, which reads the market's curve params from its MarketConfig via an external
-// `getConfig()` static call (the config address resolved from the `marketConfig` registry). `getConfig()` is
-// summarized to a single ghost-backed Config and the registry/state reads are dispatched to the linked IRM, so the
+// Both paths reach the IRM's borrow rate, which reads the market's curve params from its AdaptiveCurveConfig via an external
+// `getCurveParams()` static call (the config address resolved from the `config` registry). `getCurveParams()` is
+// summarized to a single ghost-backed Params and the registry/state reads are dispatched to the linked IRM, so the
 // lib reads the same state and params as the contract.
 ghost int256 g_curveSteepness;
 ghost int256 g_adjustmentSpeed;
@@ -16,8 +16,8 @@ ghost int256 g_minRateAtTarget;
 ghost int256 g_maxRateAtTarget;
 ghost uint256 g_maxBorrowRate;
 
-function getConfigSummary() returns IMarketConfig.Config {
-    IMarketConfig.Config c;
+function getCurveParamsSummary() returns IAdaptiveCurveConfig.Params {
+    IAdaptiveCurveConfig.Params c;
     require c.curveSteepness == g_curveSteepness;
     require c.adjustmentSpeed == g_adjustmentSpeed;
     require c.targetUtilization == g_targetUtilization;
@@ -32,10 +32,10 @@ methods {
     function AdaptiveCurveIrmLibHarness.toId(AdaptiveCurveIrm.MarketParams) external returns (AdaptiveCurveIrm.Id) envfree;
 
     function _.rateAtTarget(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
-    function _.marketConfig(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
+    function _.config(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
     function _.market(Morpho.Id) external => DISPATCHER(true);
     function _.borrowRateView(Morpho.MarketParams, Morpho.Market) external => DISPATCHER(true);
-    function _.getConfig() external => getConfigSummary() expect IMarketConfig.Config;
+    function _.getCurveParams() external => getCurveParamsSummary() expect IAdaptiveCurveConfig.Params;
 }
 
 // Rule: AdaptiveCurveIrmBalancesLib behaves identically to MorphoBalancesLib

@@ -14,6 +14,9 @@ library ErrorsLib {
     /// @dev Thrown when the caller of an owner-only function is not the owner.
     string internal constant NOT_OWNER = "not owner";
 
+    /// @dev Thrown when `initialize` is called after the owner is already set.
+    string internal constant ALREADY_INITIALIZED = "already initialized";
+
     /// @dev Thrown when a borrow rate is requested for a market that has no config set.
     string internal constant CONFIG_NOT_SET = "config not set";
 

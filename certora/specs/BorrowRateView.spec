@@ -3,10 +3,10 @@
 using AdaptiveCurveIrm as AdaptiveCurveIrm;
 using AdaptiveCurveIrmLibHarness as AdaptiveCurveIrmLibHarness;
 
-// The periphery lib recomputes the rate from a market id by reading the IRM's registry (`marketConfig`), the stored
-// `rateAtTarget`, and the market's MarketConfig (`getConfig`) -- all via external calls. They are dispatched to the
-// linked IRM so the lib reads the same state the contract reads directly; `getConfig()` is summarized to a single
-// ghost-backed Config so both sides see identical params (equivalence is about computing the same rate from the same
+// The periphery lib recomputes the rate from a market id by reading the IRM's registry (`config`), the stored
+// `rateAtTarget`, and the market's AdaptiveCurveConfig (`getCurveParams`) -- all via external calls. They are dispatched to the
+// linked IRM so the lib reads the same state the contract reads directly; `getCurveParams()` is summarized to a single
+// ghost-backed Params so both sides see identical params (equivalence is about computing the same rate from the same
 // config, not about a particular config value).
 ghost int256 g_curveSteepness;
 ghost int256 g_adjustmentSpeed;
@@ -16,8 +16,8 @@ ghost int256 g_minRateAtTarget;
 ghost int256 g_maxRateAtTarget;
 ghost uint256 g_maxBorrowRate;
 
-function getConfigSummary() returns IMarketConfig.Config {
-    IMarketConfig.Config c;
+function getCurveParamsSummary() returns IAdaptiveCurveConfig.Params {
+    IAdaptiveCurveConfig.Params c;
     require c.curveSteepness == g_curveSteepness;
     require c.adjustmentSpeed == g_adjustmentSpeed;
     require c.targetUtilization == g_targetUtilization;
@@ -32,8 +32,8 @@ methods {
     function AdaptiveCurveIrmLibHarness.toId(AdaptiveCurveIrm.MarketParams) external returns (AdaptiveCurveIrm.Id) envfree;
 
     function _.rateAtTarget(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
-    function _.marketConfig(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
-    function _.getConfig() external => getConfigSummary() expect IMarketConfig.Config;
+    function _.config(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
+    function _.getCurveParams() external => getCurveParamsSummary() expect IAdaptiveCurveConfig.Params;
 }
 
 // Rule: the lib returns the same result as the contract

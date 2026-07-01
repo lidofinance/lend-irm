@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {MarketConfig} from "../src/adaptive-curve-irm/MarketConfig.sol";
-import {IMarketConfig} from "../src/adaptive-curve-irm/interfaces/IMarketConfig.sol";
+import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig.sol";
+import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
 import {ErrorsLib} from "../src/adaptive-curve-irm/libraries/ErrorsLib.sol";
 import {WAD_INT as WAD} from "../src/adaptive-curve-irm/libraries/MathLib.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
-contract MarketConfigTest is Test {
+contract AdaptiveCurveConfigTest is Test {
     /// The default (upstream-equivalent) config passes validation and deploys.
     function testDefaultConfigIsValid() public {
-        MarketConfig config = new MarketConfig(_defaultConfig());
-        assertEq(config.getConfig().curveSteepness, ConstantsLib.CURVE_STEEPNESS, "default config deployed");
+        AdaptiveCurveConfig config = new AdaptiveCurveConfig(_defaultConfig());
+        assertEq(config.getCurveParams().curveSteepness, ConstantsLib.CURVE_STEEPNESS, "default config deployed");
     }
 
-    /// getConfig() round-trips every field frozen into the immutables.
+    /// getCurveParams() round-trips every field frozen into the immutables.
     function testGetConfigRoundTrips() public {
-        IMarketConfig.Config memory config = _defaultConfig();
+        IAdaptiveCurveConfig.Params memory config = _defaultConfig();
         config.maxBorrowRate = 0.5 ether / uint256(365 days);
-        IMarketConfig.Config memory roundTripped = new MarketConfig(config).getConfig();
+        IAdaptiveCurveConfig.Params memory roundTripped = new AdaptiveCurveConfig(config).getCurveParams();
 
         assertEq(roundTripped.curveSteepness, config.curveSteepness, "curveSteepness");
         assertEq(roundTripped.adjustmentSpeed, config.adjustmentSpeed, "adjustmentSpeed");
@@ -33,7 +33,7 @@ contract MarketConfigTest is Test {
 
     /// The constructor rejects each parameter just outside both ends of its valid range.
     function testDeploymentRevertsOnInvalidParams() public {
-        IMarketConfig.Config memory config;
+        IAdaptiveCurveConfig.Params memory config;
 
         config = _defaultConfig();
         config.curveSteepness = WAD - 1; // < 1e18
@@ -82,8 +82,8 @@ contract MarketConfigTest is Test {
 
     /* HELPERS */
 
-    function _defaultConfig() internal pure returns (IMarketConfig.Config memory) {
-        return IMarketConfig.Config({
+    function _defaultConfig() internal pure returns (IAdaptiveCurveConfig.Params memory) {
+        return IAdaptiveCurveConfig.Params({
             curveSteepness: ConstantsLib.CURVE_STEEPNESS,
             adjustmentSpeed: ConstantsLib.ADJUSTMENT_SPEED,
             targetUtilization: ConstantsLib.TARGET_UTILIZATION,
@@ -94,8 +94,8 @@ contract MarketConfigTest is Test {
         });
     }
 
-    function _expectRevert(IMarketConfig.Config memory config, string memory expectedError) internal {
+    function _expectRevert(IAdaptiveCurveConfig.Params memory config, string memory expectedError) internal {
         vm.expectRevert(bytes(expectedError));
-        new MarketConfig(config);
+        new AdaptiveCurveConfig(config);
     }
 }

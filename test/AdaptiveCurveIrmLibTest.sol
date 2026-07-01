@@ -2,8 +2,8 @@
 pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
-import {MarketConfigFactory} from "../src/adaptive-curve-irm/MarketConfigFactory.sol";
-import {IMarketConfig} from "../src/adaptive-curve-irm/interfaces/IMarketConfig.sol";
+import {AdaptiveCurveConfigFactory} from "../src/adaptive-curve-irm/AdaptiveCurveConfigFactory.sol";
+import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 import "../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
 import "../lib/lido-lend/src/interfaces/IMorpho.sol";
@@ -17,21 +17,23 @@ contract AdaptiveCurveIrmLibTest is Test {
     using MathLib for uint256;
 
     address public adaptiveCurveIrm;
-    MarketConfigFactory internal factory;
+    AdaptiveCurveConfigFactory internal factory;
 
     function setUp() public {
-        factory = new MarketConfigFactory();
+        factory = new AdaptiveCurveConfigFactory();
         adaptiveCurveIrm = _deploy();
     }
 
     /// @dev A bare IRM bound to the shared factory, with the test as morpho and owner (so it can set configs).
     function _deploy() internal returns (address) {
-        return address(new AdaptiveCurveIrm(address(this), address(this)));
+        AdaptiveCurveIrm irm_ = new AdaptiveCurveIrm(address(this));
+        irm_.initialize(address(this));
+        return address(irm_);
     }
 
     /// @dev The periphery's target curve: default constants with a configurable cap, so tests can vary just the cap.
-    function _config(uint256 maxBorrowRate) internal pure returns (IMarketConfig.Config memory) {
-        return IMarketConfig.Config({
+    function _config(uint256 maxBorrowRate) internal pure returns (IAdaptiveCurveConfig.Params memory) {
+        return IAdaptiveCurveConfig.Params({
             curveSteepness: ConstantsLib.CURVE_STEEPNESS,
             adjustmentSpeed: ConstantsLib.ADJUSTMENT_SPEED,
             targetUtilization: ConstantsLib.TARGET_UTILIZATION,
@@ -42,8 +44,8 @@ contract AdaptiveCurveIrmLibTest is Test {
         });
     }
 
-    /// @dev Deploys a MarketConfig via the factory and points `irmAddress` at it for `id`.
-    function _register(address irmAddress, bytes32 id, IMarketConfig.Config memory config) internal {
+    /// @dev Deploys an AdaptiveCurveConfig via the factory and points `irmAddress` at it for `id`.
+    function _register(address irmAddress, bytes32 id, IAdaptiveCurveConfig.Params memory config) internal {
         AdaptiveCurveIrm(irmAddress).setConfig(Id.wrap(id), factory.createConfig(config));
     }
 
@@ -153,7 +155,7 @@ contract AdaptiveCurveIrmLibTest is Test {
         Market memory market
     ) public {
         vm.warp(1000 days);
-        IMarketConfig.Config memory config = _boundedConfig(
+        IAdaptiveCurveConfig.Params memory config = _boundedConfig(
             curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
         );
         address irmAddress = _deploy();
@@ -177,7 +179,7 @@ contract AdaptiveCurveIrmLibTest is Test {
         assertEq(fromLib, fromContract, "periphery matches the contract across the config space");
     }
 
-    /// @dev Squeezes raw fuzz inputs into an always-valid `Config`, so the periphery-equivalence fuzzer can vary the
+    /// @dev Squeezes raw fuzz inputs into an always-valid `Params`, so the periphery-equivalence fuzzer can vary the
     /// whole curve.
     function _boundedConfig(
         int256 curveSteepness,
@@ -188,7 +190,7 @@ contract AdaptiveCurveIrmLibTest is Test {
         int256 initialRate,
         uint256 maxBorrowRate,
         bool capEnabled
-    ) internal view returns (IMarketConfig.Config memory config) {
+    ) internal view returns (IAdaptiveCurveConfig.Params memory config) {
         int256 rateCeil = int256(10_000 ether) / int256(365 days); // MAX_RATE_AT_TARGET_LIMIT
         int256 speedCeil = int256(10_000 ether) / int256(365 days); // MAX_ADJUSTMENT_SPEED
         config.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
