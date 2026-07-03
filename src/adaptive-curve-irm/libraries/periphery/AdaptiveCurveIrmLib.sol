@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Id, Market, IMorpho} from "../../../../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {Id, Market, IMorpho} from "../../../../lib/morpho-blue/src/interfaces/IMorpho.sol";
 import {IAdaptiveCurveIrm} from "../../interfaces/IAdaptiveCurveIrm.sol";
 import {IAdaptiveCurveConfig} from "../../interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../../interfaces/IAdaptiveCurveTypes.sol";
@@ -10,9 +10,9 @@ import {ExpLib} from "../ExpLib.sol";
 import {UtilsLib} from "../UtilsLib.sol";
 import {ErrorsLib} from "../ErrorsLib.sol";
 import {MathLib, WAD_INT as WAD} from "../MathLib.sol";
-import {SharesMathLib} from "../../../../lib/lido-lend/src/libraries/SharesMathLib.sol";
-import {MathLib as MorphoMathLib} from "../../../../lib/lido-lend/src/libraries/MathLib.sol";
-import {UtilsLib as MorphoUtilsLib} from "../../../../lib/lido-lend/src/libraries/UtilsLib.sol";
+import {SharesMathLib} from "../../../../lib/morpho-blue/src/libraries/SharesMathLib.sol";
+import {MathLib as MorphoMathLib} from "../../../../lib/morpho-blue/src/libraries/MathLib.sol";
+import {UtilsLib as MorphoUtilsLib} from "../../../../lib/morpho-blue/src/libraries/UtilsLib.sol";
 
 /// @dev Library to compute borrowRateView and expectedMarketBalances with only the market id.
 /// @dev Must be used only for markets with an AdaptiveCurveIrm as irm.
