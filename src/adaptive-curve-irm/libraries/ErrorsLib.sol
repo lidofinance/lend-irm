@@ -35,6 +35,9 @@ library ErrorsLib {
     /// @dev Thrown unless 0 < minRateAtTarget <= maxRateAtTarget <= upper limit.
     string internal constant INVALID_RATE_BOUNDS = "invalid rate bounds";
 
+    /// @dev Thrown when a non-zero `maxBorrowRate` exceeds the curve's maximum possible output.
+    string internal constant INVALID_MAX_BORROW_RATE = "invalid maxBorrowRate";
+
     /// @dev Thrown when `initialRateAtTarget` is outside [minRateAtTarget, maxRateAtTarget].
     string internal constant INVALID_INITIAL_RATE = "invalid initialRateAtTarget";
 }

@@ -79,9 +79,28 @@ contract AdaptiveCurveConfigTest is Test {
         config = _defaultConfig();
         config.initialRateAtTarget = config.maxRateAtTarget + 1; // > max
         _expectRevert(config, ErrorsLib.INVALID_INITIAL_RATE);
+
+        config = _defaultConfig();
+        config.maxBorrowRate = _maxBorrowRateLimit() + 1; // above the curve's maximum possible output
+        _expectRevert(config, ErrorsLib.INVALID_MAX_BORROW_RATE);
+    }
+
+    /// The cap's boundary: the largest value the curve can ever output deploys; `0` stays the explicit "disabled".
+    function testMaxBorrowRateBoundary() public {
+        AdaptiveCurveParams memory config = _defaultConfig();
+        config.maxBorrowRate = _maxBorrowRateLimit();
+        assertEq(new AdaptiveCurveConfig(config).MAX_BORROW_RATE(), config.maxBorrowRate, "limit itself deploys");
+
+        config.maxBorrowRate = 0;
+        assertEq(new AdaptiveCurveConfig(config).MAX_BORROW_RATE(), 0, "zero (disabled) deploys");
     }
 
     /* HELPERS */
+
+    /// @dev Mirrors the contract's `MAX_BORROW_RATE_LIMIT`: max rate-at-target times max steepness.
+    function _maxBorrowRateLimit() internal pure returns (uint256) {
+        return uint256(10_000 ether / int256(365 days)) * 100;
+    }
 
     function _defaultConfig() internal pure returns (AdaptiveCurveParams memory) {
         return AdaptiveCurveParams({
