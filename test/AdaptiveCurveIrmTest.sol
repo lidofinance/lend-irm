@@ -9,7 +9,9 @@ import {ConstantsLib} from "./ConstantsLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
-contract AdaptiveCurveIrmTest is Test {
+import {CurveRefHelper} from "./CurveRefHelper.sol";
+
+contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     using MathLib for int256;
     using MathLib for uint256;
     using UtilsLib for int256;
@@ -170,24 +172,35 @@ contract AdaptiveCurveIrmTest is Test {
 
         market.totalBorrowAssets = initialBorrowAssets;
 
+        // Every ping is checked EXACTLY against the reference; the analytic formulas below then only sanity-check
+        // the aggregate drift.
+        int256 refRate = ConstantsLib.INITIAL_RATE_AT_TARGET;
+        // The per-ping reference work would push this 1B-gas loop past the block gas limit; the loop is not
+        // a gas benchmark, so run it unmetered.
+        vm.pauseGasMetering();
         for (uint256 i; i < 45 days / 1 minutes; ++i) {
             market.lastUpdate = uint128(block.timestamp);
             vm.warp(block.timestamp + 1 minutes);
 
+            (uint256 expectedAvgRate, int256 expectedEndRate) = _refBorrowRate(_defaultConfig(), refRate, market);
             uint256 avgBorrowRate = irm.borrowRate(marketParams, market);
+            assertEq(avgBorrowRate, expectedAvgRate, "each ping matches the reference");
+            refRate = expectedEndRate;
+
             uint256 interest = market.totalBorrowAssets.wMulDown(avgBorrowRate.wTaylorCompounded(1 minutes));
             market.totalSupplyAssets += uint128(interest);
             market.totalBorrowAssets += uint128(interest);
         }
+        vm.resumeGasMetering();
 
         assertApproxEqRel(
             market.totalBorrowAssets.wDivDown(market.totalSupplyAssets), 0.95 ether, 0.01 ether, "utilization"
         );
 
         int256 rateAtTarget = irm.rateAtTarget(marketParams.id());
-        // Expected rate: 4% * exp(50 * 45 / 365 * 50%) = 87.22%.
+        assertEq(rateAtTarget, refRate, "final rateAtTarget matches the reference");
+        // Expected rate: 4% * exp(50 * 45 / 365 * 50%) = 87.22%; the pings push it a few % above.
         int256 expectedRateAtTarget = int256(0.8722 ether) / 365 days;
-        assertGe(rateAtTarget, expectedRateAtTarget);
         // The rate is tolerated to be +8% (relatively) because of the pings every minute.
         assertApproxEqRel(rateAtTarget, expectedRateAtTarget, 0.08 ether, "expectedRateAtTarget");
 
@@ -222,15 +235,26 @@ contract AdaptiveCurveIrmTest is Test {
         assertEq(irm.borrowRate(marketParams, market), uint256(ConstantsLib.INITIAL_RATE_AT_TARGET));
         assertEq(irm.rateAtTarget(marketParams.id()), ConstantsLib.INITIAL_RATE_AT_TARGET);
 
+        // Every ping is checked EXACTLY against the reference (drift away from target comes from the accrued
+        // interest, not from the rate math).
+        int256 refRate = ConstantsLib.INITIAL_RATE_AT_TARGET;
+        // The per-ping reference work would push this 1B-gas loop past the block gas limit; the loop is not
+        // a gas benchmark, so run it unmetered.
+        vm.pauseGasMetering();
         for (uint256 i; i < 3 weeks / 1 minutes; ++i) {
             market.lastUpdate = uint128(block.timestamp);
             vm.warp(block.timestamp + 1 minutes);
 
+            (uint256 expectedAvgRate, int256 expectedEndRate) = _refBorrowRate(_defaultConfig(), refRate, market);
             uint256 avgBorrowRate = irm.borrowRate(marketParams, market);
+            assertEq(avgBorrowRate, expectedAvgRate, "each ping matches the reference");
+            refRate = expectedEndRate;
+
             uint256 interest = market.totalBorrowAssets.wMulDown(avgBorrowRate.wTaylorCompounded(1 minutes));
             market.totalSupplyAssets += uint128(interest);
             market.totalBorrowAssets += uint128(interest);
         }
+        vm.resumeGasMetering();
 
         assertApproxEqRel(
             market.totalBorrowAssets.wDivDown(market.totalSupplyAssets),
@@ -239,14 +263,13 @@ contract AdaptiveCurveIrmTest is Test {
         );
 
         int256 rateAtTarget = irm.rateAtTarget(marketParams.id());
-        assertGe(rateAtTarget, ConstantsLib.INITIAL_RATE_AT_TARGET);
+        assertEq(rateAtTarget, refRate, "final rateAtTarget matches the reference");
         // The rate is tolerated to be +10% (relatively) because of the pings every minute.
         assertApproxEqRel(rateAtTarget, ConstantsLib.INITIAL_RATE_AT_TARGET, 0.1 ether);
     }
 
     function testFirstBorrowRate(Market memory market) public {
-        vm.assume(market.totalBorrowAssets > 0);
-        vm.assume(market.totalSupplyAssets >= market.totalBorrowAssets);
+        _boundMarket(market);
 
         uint256 avgBorrowRate = irm.borrowRate(marketParams, market);
         int256 rateAtTarget = irm.rateAtTarget(marketParams.id());
@@ -256,8 +279,7 @@ contract AdaptiveCurveIrmTest is Test {
     }
 
     function testBorrowRateEventEmission(Market memory market) public {
-        vm.assume(market.totalBorrowAssets > 0);
-        vm.assume(market.totalSupplyAssets >= market.totalBorrowAssets);
+        _boundMarket(market);
 
         vm.expectEmit(true, true, true, true, address(irm));
         emit BorrowRateUpdate(
@@ -269,8 +291,7 @@ contract AdaptiveCurveIrmTest is Test {
     }
 
     function testFirstBorrowRateView(Market memory market) public {
-        vm.assume(market.totalBorrowAssets > 0);
-        vm.assume(market.totalSupplyAssets >= market.totalBorrowAssets);
+        _boundMarket(market);
 
         uint256 avgBorrowRate = irm.borrowRateView(marketParams, market);
         int256 rateAtTarget = irm.rateAtTarget(marketParams.id());
@@ -280,12 +301,10 @@ contract AdaptiveCurveIrmTest is Test {
     }
 
     function testBorrowRate(Market memory market0, Market memory market1) public {
-        vm.assume(market0.totalBorrowAssets > 0);
-        vm.assume(market0.totalSupplyAssets >= market0.totalBorrowAssets);
+        _boundMarket(market0);
         irm.borrowRate(marketParams, market0);
 
-        vm.assume(market1.totalBorrowAssets > 0);
-        vm.assume(market1.totalSupplyAssets >= market1.totalBorrowAssets);
+        _boundMarket(market1);
         market1.lastUpdate = uint128(bound(market1.lastUpdate, block.timestamp - 5 days, block.timestamp - 1));
 
         int256 expectedRateAtTarget = _expectedRateAtTarget(marketParams.id(), market1);
@@ -300,12 +319,10 @@ contract AdaptiveCurveIrmTest is Test {
     }
 
     function testBorrowRateNoTimeElapsed(Market memory market0, Market memory market1) public {
-        vm.assume(market0.totalBorrowAssets > 0);
-        vm.assume(market0.totalSupplyAssets >= market0.totalBorrowAssets);
+        _boundMarket(market0);
         irm.borrowRate(marketParams, market0);
 
-        vm.assume(market1.totalBorrowAssets > 0);
-        vm.assume(market1.totalSupplyAssets >= market1.totalBorrowAssets);
+        _boundMarket(market1);
         market1.lastUpdate = uint128(block.timestamp);
 
         int256 expectedRateAtTarget = _expectedRateAtTarget(marketParams.id(), market1);
@@ -320,8 +337,7 @@ contract AdaptiveCurveIrmTest is Test {
     }
 
     function testBorrowRateNoUtilizationChange(Market memory market0, Market memory market1) public {
-        vm.assume(market0.totalBorrowAssets > 0);
-        vm.assume(market0.totalSupplyAssets >= market0.totalBorrowAssets);
+        _boundMarket(market0);
         irm.borrowRate(marketParams, market0);
 
         market1.totalBorrowAssets = market0.totalBorrowAssets;
@@ -348,8 +364,8 @@ contract AdaptiveCurveIrmTest is Test {
 
         Market memory market;
         market.lastUpdate = uint128(block.timestamp);
-        market.totalBorrowAssets = uint128(totalSupplyAssets);
-        market.totalSupplyAssets = uint128(totalBorrowAssets);
+        market.totalSupplyAssets = uint128(totalSupplyAssets);
+        market.totalBorrowAssets = uint128(totalBorrowAssets);
 
         vm.warp(block.timestamp + elapsed);
         irm.borrowRate(marketParams, market);
@@ -357,34 +373,19 @@ contract AdaptiveCurveIrmTest is Test {
 
     /* INVARIANTS */
 
-    function invariantGeMinRateAtTarget() public {
+    /// After any fuzzed call sequence, a probe interaction matches the reference EXACTLY on both paths, and the
+    /// stored rateAtTarget lands on the reference's end value — which the reference clamps to
+    /// [minRateAtTarget, maxRateAtTarget] by construction, so the upstream min/max band invariants are implied.
+    function invariantRateMatchesReference() public {
         Market memory market;
         market.totalBorrowAssets = 9 ether;
         market.totalSupplyAssets = 10 ether;
 
-        assertGe(
-            irm.borrowRateView(marketParams, market),
-            uint256(ConstantsLib.MIN_RATE_AT_TARGET.wDivToZero(ConstantsLib.CURVE_STEEPNESS))
-        );
-        assertGe(
-            irm.borrowRate(marketParams, market),
-            uint256(ConstantsLib.MIN_RATE_AT_TARGET.wDivToZero(ConstantsLib.CURVE_STEEPNESS))
-        );
-    }
-
-    function invariantLeMaxRateAtTarget() public {
-        Market memory market;
-        market.totalBorrowAssets = 9 ether;
-        market.totalSupplyAssets = 10 ether;
-
-        assertLe(
-            irm.borrowRateView(marketParams, market),
-            uint256(ConstantsLib.MAX_RATE_AT_TARGET.wMulToZero(ConstantsLib.CURVE_STEEPNESS))
-        );
-        assertLe(
-            irm.borrowRate(marketParams, market),
-            uint256(ConstantsLib.MAX_RATE_AT_TARGET.wMulToZero(ConstantsLib.CURVE_STEEPNESS))
-        );
+        (uint256 expectedRate, int256 expectedEndRate) =
+            _refBorrowRate(_defaultConfig(), irm.rateAtTarget(marketParams.id()), market);
+        assertEq(irm.borrowRateView(marketParams, market), expectedRate, "view matches the reference");
+        assertEq(irm.borrowRate(marketParams, market), expectedRate, "borrowRate matches the reference");
+        assertEq(irm.rateAtTarget(marketParams.id()), expectedEndRate, "rateAtTarget matches the reference");
     }
 
     /* ================================ LIDO FORK TESTS ================================ */
@@ -462,6 +463,133 @@ contract AdaptiveCurveIrmTest is Test {
     function testTransferOwnershipRejectsZero() public {
         vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
         AdaptiveCurveIrm(address(irm)).transferOwnership(address(0));
+    }
+
+    /// setManager rejects the zero address: the manager cannot be unset.
+    function testSetManagerRejectsZero() public {
+        vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
+        AdaptiveCurveIrm(address(irm)).setManager(address(0));
+    }
+
+    /// initialize emits both role events: ownership from the zero address and the manager binding.
+    function testInitializeEmitsRoleEvents() public {
+        AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this));
+        vm.store(address(fresh), bytes32(uint256(4)), bytes32(0)); // unlock (see _newIrm)
+        address owner_ = makeAddr("owner");
+        address manager_ = makeAddr("manager");
+
+        vm.expectEmit(true, true, true, true, address(fresh));
+        emit IAdaptiveCurveIrm.OwnershipTransferred(address(0), owner_);
+        vm.expectEmit(true, true, true, true, address(fresh));
+        emit IAdaptiveCurveIrm.ManagerSet(manager_);
+        fresh.initialize(owner_, manager_);
+    }
+
+    /// transferOwnership and setManager emit their role events with exact fields.
+    function testRoleRotationEmitsEvents() public {
+        AdaptiveCurveIrm irm_ = AdaptiveCurveIrm(address(irm));
+        address newOwner = makeAddr("newOwner");
+        address newManager = makeAddr("newManager");
+
+        vm.expectEmit(true, true, true, true, address(irm_));
+        emit IAdaptiveCurveIrm.ManagerSet(newManager);
+        irm_.setManager(newManager);
+
+        vm.expectEmit(true, true, true, true, address(irm_));
+        emit IAdaptiveCurveIrm.OwnershipTransferred(address(this), newOwner);
+        irm_.transferOwnership(newOwner);
+    }
+
+    /// A manager distinct from the owner can set market curve params but cannot rotate either role.
+    function testManagerRoleSeparation() public {
+        AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this));
+        vm.store(address(fresh), bytes32(uint256(4)), bytes32(0)); // unlock (see _newIrm)
+        address manager_ = makeAddr("manager");
+        fresh.initialize(address(this), manager_);
+
+        MarketParams memory params;
+        params.irm = address(fresh);
+
+        vm.prank(manager_);
+        fresh.setMarketCurveParams(params, _defaultConfig());
+        assertTrue(address(fresh.marketCurveConfig(params.id())) != address(0), "manager set the market's config");
+
+        vm.prank(manager_);
+        vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
+        fresh.setManager(manager_);
+
+        vm.prank(manager_);
+        vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
+        fresh.transferOwnership(manager_);
+    }
+
+    /// setMarketCurveParams emits MarketCurveParamsSet on every set, and ConfigDeployed only on the first
+    /// deploy of a parameter set: identical params share one config across markets, different params get their own.
+    function testSetMarketCurveParamsDeduplicatesConfigs() public {
+        // Distinct from the setUp default, whose config is already deployed and cached.
+        AdaptiveCurveParams memory config = _defaultConfig();
+        config.adjustmentSpeed = config.adjustmentSpeed + 1;
+        bytes32 paramsHash = keccak256(abi.encode(config));
+
+        MarketParams memory paramsA = marketParams;
+        paramsA.loanToken = address(0xAAAA);
+        MarketParams memory paramsB = marketParams;
+        paramsB.loanToken = address(0xBBBB);
+
+        // First set deploys: ConfigDeployed (address unknown upfront: check the hash topic only), then the bind.
+        vm.expectEmit(true, false, false, false, address(irm));
+        emit IAdaptiveCurveIrm.ConfigDeployed(paramsHash, address(0));
+        vm.expectEmit(true, false, false, true, address(irm));
+        emit IAdaptiveCurveIrm.MarketCurveParamsSet(paramsA.id(), address(0), config);
+        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsA, config);
+
+        address configA = address(irm.marketCurveConfig(paramsA.id()));
+        assertEq(address(AdaptiveCurveIrm(address(irm)).deployedCurveConfigs(paramsHash)), configA, "cache filled");
+
+        // Second set with identical params: NO second ConfigDeployed, the bind reuses the cached address.
+        vm.recordLogs();
+        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsB, config);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 1, "only the bind event on a dedup hit");
+        assertEq(logs[0].topics[0], IAdaptiveCurveIrm.MarketCurveParamsSet.selector, "the bind event");
+        assertEq(address(irm.marketCurveConfig(paramsB.id())), configA, "identical params share one config");
+
+        // Different params deploy their own config.
+        AdaptiveCurveParams memory otherConfig = _defaultConfig();
+        otherConfig.curveSteepness = otherConfig.curveSteepness + 1;
+        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsB, otherConfig);
+        assertTrue(address(irm.marketCurveConfig(paramsB.id())) != configA, "different params get their own config");
+    }
+
+    /// Registry self-consistency: after sets and reparams, every market's config is exactly the cached config
+    /// for its own params (`marketCurveConfig[id] == deployedCurveConfigs[keccak256(abi.encode(params))]`).
+    function testConfigRegistryRoundTrips() public {
+        MarketParams memory paramsA = marketParams;
+        paramsA.loanToken = address(0xAAAA);
+        MarketParams memory paramsB = marketParams;
+        paramsB.loanToken = address(0xBBBB);
+
+        AdaptiveCurveParams memory sharedConfig = _defaultConfig();
+        AdaptiveCurveParams memory otherConfig = _defaultConfig();
+        otherConfig.curveSteepness = otherConfig.curveSteepness + 1;
+
+        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsA, sharedConfig);
+        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsB, sharedConfig);
+        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsB, otherConfig); // reparam
+
+        _assertRegistryRoundTrip(paramsA.id());
+        _assertRegistryRoundTrip(paramsB.id());
+    }
+
+    /// @dev The market's config resolves back to itself through the dedup cache keyed by its own params.
+    function _assertRegistryRoundTrip(Id id) internal {
+        IAdaptiveCurveConfig config = irm.marketCurveConfig(id);
+        bytes32 paramsHash = keccak256(abi.encode(config.getCurveParams()));
+        assertEq(
+            address(AdaptiveCurveIrm(address(irm)).deployedCurveConfigs(paramsHash)),
+            address(config),
+            "market config == cached config for its params"
+        );
     }
 
     /// setMarketCurveParams deploys a config from params, sets it, and the market prices.
@@ -544,11 +672,14 @@ contract AdaptiveCurveIrmTest is Test {
         Market memory marketDown = _market(1 ether, 0.1 ether);
         marketDown.lastUpdate = uint128(block.timestamp);
         vm.warp(block.timestamp + 30 days);
+        (, int256 expectedUp) = _refBorrowRate(_defaultConfig(), irm.rateAtTarget(idUp), marketUp);
+        (, int256 expectedDown) = _refBorrowRate(_defaultConfig(), irm.rateAtTarget(idDown), marketDown);
         irm.borrowRate(paramsUp, marketUp);
         irm.borrowRate(paramsDown, marketDown);
 
-        assertGt(irm.rateAtTarget(idUp), ConstantsLib.INITIAL_RATE_AT_TARGET, "up-driven market adapted up");
-        assertLt(irm.rateAtTarget(idDown), ConstantsLib.INITIAL_RATE_AT_TARGET, "down-driven market adapted down");
+        assertEq(irm.rateAtTarget(idUp), expectedUp, "up-driven market adapted exactly per the reference");
+        assertEq(irm.rateAtTarget(idDown), expectedDown, "down-driven market adapted exactly per the reference");
+        assertTrue(expectedUp != expectedDown, "the two markets diverged independently");
     }
 
     /// curveSteepness == WAD makes the curve flat: one rate at every utilization.
@@ -601,11 +732,12 @@ contract AdaptiveCurveIrmTest is Test {
         assertEq(pinned.rateAtTarget(deployedParams.id()), pinnedRate, "rateAtTarget stays pinned when min == max");
     }
 
-    /// Utilization above 100% does not revert and keeps raising the rate.
+    /// Utilization above 100% does not revert: the same curve formula extends past err == 1.
     function test_edge_utilizationAboveOne_doesNotRevert() public {
-        uint256 atOne = irm.borrowRateView(marketParams, _market(1 ether, 1 ether));
-        uint256 aboveOne = irm.borrowRateView(marketParams, _market(1 ether, 2 ether));
-        assertGt(aboveOne, atOne, "rate keeps rising above 100% utilization");
+        (uint256 expectedAtOne,) = _refBorrowRate(_defaultConfig(), 0, _market(1 ether, 1 ether));
+        (uint256 expectedAboveOne,) = _refBorrowRate(_defaultConfig(), 0, _market(1 ether, 2 ether));
+        assertEq(irm.borrowRateView(marketParams, _market(1 ether, 1 ether)), expectedAtOne, "rate at 100%");
+        assertEq(irm.borrowRateView(marketParams, _market(1 ether, 2 ether)), expectedAboveOne, "rate at 200%");
     }
 
     /// Zero supply with a positive borrow is treated as zero utilization.
@@ -640,22 +772,10 @@ contract AdaptiveCurveIrmTest is Test {
     /* ---- Fuzz & differential ---- */
 
     /// Across the operating-band config space, the IRM's output invariants always hold.
-    function testFuzz_validConfigInvariants(
-        int256 curveSteepness,
-        int256 adjustmentSpeed,
-        int256 targetUtilization,
-        int256 minRate,
-        int256 maxRate,
-        int256 initialRate,
-        uint256 maxBorrowRate,
-        bool capEnabled,
-        uint128 supply,
-        uint128 borrowed,
-        uint256 elapsed
-    ) public {
-        AdaptiveCurveParams memory config = _boundedConfig(
-            curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
-        );
+    function testFuzz_validConfigInvariants(ConfigSeed memory seed, uint128 supply, uint128 borrowed, uint256 elapsed)
+        public
+    {
+        AdaptiveCurveParams memory config = _boundedConfig(seed);
         (AdaptiveCurveIrm fuzzed, MarketParams memory deployedParams) = _deploy(config);
 
         Market memory market;
@@ -673,23 +793,14 @@ contract AdaptiveCurveIrmTest is Test {
 
     /// Across the full accepted config space (up to the ceilings), the invariants hold without reverting.
     function testFuzz_fullRangeConfigUpholdsInvariants(
-        int256 curveSteepness,
-        int256 adjustmentSpeed,
-        int256 targetUtilization,
-        int256 minRate,
-        int256 maxRate,
-        int256 initialRate,
-        uint256 maxBorrowRate,
-        bool capEnabled,
+        ConfigSeed memory seed,
         uint128 supply,
         uint128 borrowed,
         uint256 elapsed
     ) public {
         // Covers the whole accepted config space, up to the validation ceilings the operating-band fuzzer does not
         // reach. Asserts only non-revert and the structural invariants, not a reference match.
-        AdaptiveCurveParams memory config = _fullRangeConfig(
-            curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
-        );
+        AdaptiveCurveParams memory config = _fullRangeConfig(seed);
         (AdaptiveCurveIrm fuzzed, MarketParams memory deployedParams) = _deploy(config);
 
         Market memory market;
@@ -706,23 +817,14 @@ contract AdaptiveCurveIrmTest is Test {
     /// The charged rate and rateAtTarget match an independent config-parametrized reference, across the FULL accepted
     /// config space (up to the validation ceilings), not just the operating band.
     function testFuzz_curveMatchesConfigParametrizedReference(
-        int256 curveSteepness,
-        int256 adjustmentSpeed,
-        int256 targetUtilization,
-        int256 minRate,
-        int256 maxRate,
-        int256 initialRate,
-        uint256 maxBorrowRate,
-        bool capEnabled,
+        ConfigSeed memory seed,
         uint128 supply0,
         uint128 borrowed0,
         uint128 supply1,
         uint128 borrowed1,
         uint256 elapsed
     ) public {
-        AdaptiveCurveParams memory config = _fullRangeConfig(
-            curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
-        );
+        AdaptiveCurveParams memory config = _fullRangeConfig(seed);
         (AdaptiveCurveIrm fuzzed, MarketParams memory deployedParams) = _deploy(config);
         Id id = deployedParams.id();
 
@@ -796,6 +898,13 @@ contract AdaptiveCurveIrmTest is Test {
         _setConfig(address(irm_), deployedParams, config);
     }
 
+    /// @dev Squeezes a fuzzed market into the valid domain (positive debt, utilization <= 1) in place, instead of
+    /// `vm.assume`, whose rejections exhaust Foundry's rejection cap on deep fuzz campaigns.
+    function _boundMarket(Market memory market) internal view {
+        market.totalBorrowAssets = uint128(bound(market.totalBorrowAssets, 1, type(uint128).max));
+        market.totalSupplyAssets = uint128(bound(market.totalSupplyAssets, market.totalBorrowAssets, type(uint128).max));
+    }
+
     /// @dev A bare `Market` carrying only supply/borrow (i.e. a utilization) — for rate calls where nothing else
     /// matters.
     function _market(uint256 supply, uint256 borrow) internal pure returns (Market memory market) {
@@ -803,139 +912,68 @@ contract AdaptiveCurveIrmTest is Test {
         market.totalBorrowAssets = uint128(borrow);
     }
 
-    /// @dev Squeezes raw fuzz inputs into an always-valid `Params` in the realistic operating band, so the
+    /// @dev Raw fuzz inputs for `AdaptiveCurveParams`, one field per parameter; `_boundedConfig`/`_fullRangeConfig`
+    /// squeeze it into valid params. A struct rather than flat parameters: the flat 11-argument fuzzers do not fit
+    /// the legacy (no via-ir) pipeline's calldata decoder.
+    struct ConfigSeed {
+        int256 curveSteepness;
+        int256 adjustmentSpeed;
+        int256 targetUtilization;
+        int256 minRate;
+        int256 maxRate;
+        int256 initialRate;
+        uint256 maxBorrowRate;
+        bool capEnabled;
+    }
+
+    /// @dev Squeezes a raw fuzz seed into always-valid `Params` in the realistic operating band, so the
     /// differential and invariant fuzzers explore normal markets.
-    function _boundedConfig(
-        int256 curveSteepness,
-        int256 adjustmentSpeed,
-        int256 targetUtilization,
-        int256 minRate,
-        int256 maxRate,
-        int256 initialRate,
-        uint256 maxBorrowRate,
-        bool capEnabled
-    ) internal view returns (AdaptiveCurveParams memory config) {
+    function _boundedConfig(ConfigSeed memory seed) internal view returns (AdaptiveCurveParams memory config) {
         // Operating band: realistic, overflow-safe ranges where production markets live. The full validation range
         // (up to MAX_ADJUSTMENT_SPEED and MAX_RATE_AT_TARGET_LIMIT) is covered by
         // testFuzz_fullRangeConfigUpholdsInvariants.
         int256 rateCeil = int256(10 ether) / int256(365 days); // 1000%/yr
-        config.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
-        config.adjustmentSpeed = bound(adjustmentSpeed, 0, int256(1000 ether) / int256(365 days));
-        config.targetUtilization = bound(targetUtilization, 1, WAD - 1);
-        config.minRateAtTarget = bound(minRate, 1, rateCeil);
-        config.maxRateAtTarget = bound(maxRate, config.minRateAtTarget, rateCeil);
-        config.initialRateAtTarget = bound(initialRate, config.minRateAtTarget, config.maxRateAtTarget);
-        config.maxBorrowRate = capEnabled ? bound(maxBorrowRate, 1, 50 ether / uint256(365 days)) : 0;
+        config.curveSteepness = bound(seed.curveSteepness, WAD, int256(100 ether));
+        config.adjustmentSpeed = bound(seed.adjustmentSpeed, 0, int256(1000 ether) / int256(365 days));
+        config.targetUtilization = bound(seed.targetUtilization, 1, WAD - 1);
+        config.minRateAtTarget = bound(seed.minRate, 1, rateCeil);
+        config.maxRateAtTarget = bound(seed.maxRate, config.minRateAtTarget, rateCeil);
+        config.initialRateAtTarget = bound(seed.initialRate, config.minRateAtTarget, config.maxRateAtTarget);
+        config.maxBorrowRate = seed.capEnabled ? bound(seed.maxBorrowRate, 1, 50 ether / uint256(365 days)) : 0;
     }
 
     /// @dev Like `_boundedConfig` but stretched to the true validation ceilings, so the invariant fuzzer also
     /// covers the extreme end of the accepted config space.
-    function _fullRangeConfig(
-        int256 curveSteepness,
-        int256 adjustmentSpeed,
-        int256 targetUtilization,
-        int256 minRate,
-        int256 maxRate,
-        int256 initialRate,
-        uint256 maxBorrowRate,
-        bool capEnabled
-    ) internal view returns (AdaptiveCurveParams memory config) {
+    function _fullRangeConfig(ConfigSeed memory seed) internal view returns (AdaptiveCurveParams memory config) {
         // The true validation ceilings: adjustmentSpeed up to MAX_ADJUSTMENT_SPEED, rates up to
         // MAX_RATE_AT_TARGET_LIMIT.
         int256 rateCeil = int256(10_000 ether) / int256(365 days); // = MAX_RATE_AT_TARGET_LIMIT (~1e6%/yr)
         int256 speedCeil = int256(10_000 ether) / int256(365 days); // = MAX_ADJUSTMENT_SPEED (~10000/yr)
-        config.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
-        config.adjustmentSpeed = bound(adjustmentSpeed, 0, speedCeil);
-        config.targetUtilization = bound(targetUtilization, 1, WAD - 1);
-        config.minRateAtTarget = bound(minRate, 1, rateCeil);
-        config.maxRateAtTarget = bound(maxRate, config.minRateAtTarget, rateCeil);
-        config.initialRateAtTarget = bound(initialRate, config.minRateAtTarget, config.maxRateAtTarget);
-        config.maxBorrowRate = capEnabled ? bound(maxBorrowRate, 1, 10_000 ether / uint256(365 days)) : 0;
+        config.curveSteepness = bound(seed.curveSteepness, WAD, int256(100 ether));
+        config.adjustmentSpeed = bound(seed.adjustmentSpeed, 0, speedCeil);
+        config.targetUtilization = bound(seed.targetUtilization, 1, WAD - 1);
+        config.minRateAtTarget = bound(seed.minRate, 1, rateCeil);
+        config.maxRateAtTarget = bound(seed.maxRate, config.minRateAtTarget, rateCeil);
+        config.initialRateAtTarget = bound(seed.initialRate, config.minRateAtTarget, config.maxRateAtTarget);
+        config.maxBorrowRate = seed.capEnabled ? bound(seed.maxBorrowRate, 1, 10_000 ether / uint256(365 days)) : 0;
     }
 
-    /// @dev The shared check for the invariant fuzzers: after one borrowRate call, view == state, the cap holds,
-    /// the rate stays under a sane upper bound, and rateAtTarget is within [min, max].
+    /// @dev The shared check for the config fuzzers: one interaction checked EXACTLY against the reference
+    /// (curve + adaptation + cap). The reference clamps rateAtTarget to [min, max] and applies the cap by
+    /// construction, so the band and cap invariants are implied by the equality.
     function _assertConfigInvariants(
         AdaptiveCurveIrm fuzzed,
         MarketParams memory deployedParams,
         Market memory market,
         AdaptiveCurveParams memory config
     ) internal {
+        (uint256 expectedRate, int256 expectedEndRate) =
+            _refBorrowRate(config, fuzzed.rateAtTarget(deployedParams.id()), market);
         uint256 rateView = fuzzed.borrowRateView(deployedParams, market);
         uint256 rate = fuzzed.borrowRate(deployedParams, market);
         assertEq(rateView, rate, "borrowRateView == borrowRate");
-        if (config.maxBorrowRate != 0) assertLe(rate, config.maxBorrowRate, "rate <= MAX_BORROW_RATE");
-        // For utilization <= 1 the uncapped rate is exactly `curveSteepness * avgRateAtTarget` at its worst case
-        // (err == WAD), and avgRateAtTarget <= maxRateAtTarget, so the rate never exceeds this tight upper bound (no
-        // rounding slack needed, since `wMulToZero` is monotonic). A sign flip in the curve math would wrap the
-        // int->uint cast far above the bound, so the assert doubles as a non-negativity guard.
-        assertLe(
-            rate, uint256(config.curveSteepness.wMulToZero(config.maxRateAtTarget)), "rate within tight upper bound"
-        );
-        int256 storedRate = fuzzed.rateAtTarget(deployedParams.id());
-        assertGe(storedRate, config.minRateAtTarget, "rateAtTarget >= MIN_RATE_AT_TARGET");
-        assertLe(storedRate, config.maxRateAtTarget, "rateAtTarget <= MAX_RATE_AT_TARGET");
-    }
-
-    /// @dev The differential test's oracle: recomputes the borrow rate from scratch (curve + adaptation + cap)
-    /// so the contract's output can be checked against an independent implementation.
-    function _refBorrowRate(AdaptiveCurveParams memory config, int256 startRate, Market memory market)
-        internal
-        view
-        returns (uint256, int256)
-    {
-        int256 err = _refErr(market, config.targetUtilization);
-
-        int256 avgRateAtTarget;
-        int256 endRateAtTarget;
-        if (startRate == 0) {
-            avgRateAtTarget = config.initialRateAtTarget;
-            endRateAtTarget = config.initialRateAtTarget;
-        } else {
-            int256 linearAdaptation =
-                config.adjustmentSpeed.wMulToZero(err) * int256(block.timestamp - market.lastUpdate);
-            if (linearAdaptation == 0) {
-                avgRateAtTarget = startRate;
-                endRateAtTarget = startRate;
-            } else {
-                endRateAtTarget =
-                    _refNewRateAtTarget(startRate, linearAdaptation, config.minRateAtTarget, config.maxRateAtTarget);
-                int256 midRateAtTarget = _refNewRateAtTarget(
-                    startRate, linearAdaptation / 2, config.minRateAtTarget, config.maxRateAtTarget
-                );
-                avgRateAtTarget = (startRate + endRateAtTarget + 2 * midRateAtTarget) / 4;
-            }
-        }
-
-        uint256 rate = uint256(_refCurve(avgRateAtTarget, err, config.curveSteepness));
-        if (config.maxBorrowRate != 0 && rate > config.maxBorrowRate) rate = config.maxBorrowRate;
-        return (rate, endRateAtTarget);
-    }
-
-    /// @dev Reference `err`: utilization's signed deviation from target, scaled to [-1, +1] (-1 empty, 0 at
-    /// target, +1 full). Mirrors the contract.
-    function _refErr(Market memory market, int256 targetUtilization) internal pure returns (int256) {
-        int256 utilization =
-            int256(market.totalSupplyAssets > 0 ? market.totalBorrowAssets.wDivDown(market.totalSupplyAssets) : 0);
-        int256 errNormFactor = utilization > targetUtilization ? WAD - targetUtilization : targetUtilization;
-        return (utilization - targetUtilization).wDivToZero(errNormFactor);
-    }
-
-    /// @dev Reference curve: maps (`rateAtTarget`, `err`) to a rate for `curveSteepness`. Mirrors the contract's
-    /// `_curve`.
-    function _refCurve(int256 _rateAtTarget, int256 err, int256 curveSteepness) internal pure returns (int256) {
-        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(curveSteepness) : curveSteepness - WAD;
-        return (coeff.wMulToZero(err) + WAD).wMulToZero(_rateAtTarget);
-    }
-
-    /// @dev Reference adaptation step: start * exp(linearAdaptation), clamped to [min, max]. Mirrors
-    /// `_newRateAtTarget`.
-    function _refNewRateAtTarget(int256 start, int256 linearAdaptation, int256 minRate, int256 maxRate)
-        internal
-        pure
-        returns (int256)
-    {
-        return start.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(minRate, maxRate);
+        assertEq(rate, expectedRate, "rate matches the reference (incl. the cap)");
+        assertEq(fuzzed.rateAtTarget(deployedParams.id()), expectedEndRate, "rateAtTarget matches the reference");
     }
 
     /* Upstream helpers (used by the Morpho upstream tests above). */

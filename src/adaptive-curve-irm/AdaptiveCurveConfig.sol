@@ -8,17 +8,24 @@ import {WAD_INT as WAD} from "./libraries/MathLib.sol";
 
 /// @title AdaptiveCurveConfig
 /// @author Lido.
-/// @notice Immutable holder of one curve's parameters. The factory deploys one per market and the AdaptiveCurveIrm
-/// reads it through an external static call (`getCurveParams()`). Parameters are validated at construction and frozen.
+/// @notice Immutable holder of one curve's parameters, validated at construction. The AdaptiveCurveIrm deploys one
+/// per unique parameter set and prices its markets from it.
 contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
     /* IMMUTABLES */
 
+    /// @inheritdoc IAdaptiveCurveConfig
     int256 public immutable CURVE_STEEPNESS;
+    /// @inheritdoc IAdaptiveCurveConfig
     int256 public immutable ADJUSTMENT_SPEED;
+    /// @inheritdoc IAdaptiveCurveConfig
     int256 public immutable TARGET_UTILIZATION;
+    /// @inheritdoc IAdaptiveCurveConfig
     int256 public immutable INITIAL_RATE_AT_TARGET;
+    /// @inheritdoc IAdaptiveCurveConfig
     int256 public immutable MIN_RATE_AT_TARGET;
+    /// @inheritdoc IAdaptiveCurveConfig
     int256 public immutable MAX_RATE_AT_TARGET;
+    /// @inheritdoc IAdaptiveCurveConfig
     uint256 public immutable MAX_BORROW_RATE;
 
     /* CONSTANTS */
@@ -34,38 +41,38 @@ contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
 
     /* CONSTRUCTOR */
 
-    /// @notice Validates `cfg` and freezes it into immutables.
-    constructor(AdaptiveCurveParams memory cfg) {
-        _validateConfig(cfg);
+    /// @notice Validates `curveParams` and freezes it into immutables.
+    constructor(AdaptiveCurveParams memory curveParams) {
+        _validateCurveParams(curveParams);
 
-        CURVE_STEEPNESS = cfg.curveSteepness;
-        ADJUSTMENT_SPEED = cfg.adjustmentSpeed;
-        TARGET_UTILIZATION = cfg.targetUtilization;
-        INITIAL_RATE_AT_TARGET = cfg.initialRateAtTarget;
-        MIN_RATE_AT_TARGET = cfg.minRateAtTarget;
-        MAX_RATE_AT_TARGET = cfg.maxRateAtTarget;
-        MAX_BORROW_RATE = cfg.maxBorrowRate;
+        CURVE_STEEPNESS = curveParams.curveSteepness;
+        ADJUSTMENT_SPEED = curveParams.adjustmentSpeed;
+        TARGET_UTILIZATION = curveParams.targetUtilization;
+        INITIAL_RATE_AT_TARGET = curveParams.initialRateAtTarget;
+        MIN_RATE_AT_TARGET = curveParams.minRateAtTarget;
+        MAX_RATE_AT_TARGET = curveParams.maxRateAtTarget;
+        MAX_BORROW_RATE = curveParams.maxBorrowRate;
     }
 
-    /// @dev Reverts unless `cfg` is a valid curve configuration, with a per-parameter error message. The bounds
-    /// (upper limits included) keep the curve math inside its non-overflowing range, so `borrowRate` returns a
+    /// @dev Reverts unless `curveParams` is a valid curve configuration, with a per-parameter error message. The
+    /// bounds (upper limits included) keep the curve math inside its non-overflowing range, so `borrowRate` returns a
     /// non-negative rate without reverting. They enforce well-formedness only, not economic soundness.
-    function _validateConfig(AdaptiveCurveParams memory cfg) private pure {
-        require(cfg.curveSteepness >= WAD, ErrorsLib.INVALID_CURVE_STEEPNESS);
-        require(cfg.curveSteepness <= MAX_CURVE_STEEPNESS, ErrorsLib.INVALID_CURVE_STEEPNESS);
+    function _validateCurveParams(AdaptiveCurveParams memory curveParams) private pure {
+        require(curveParams.curveSteepness >= WAD, ErrorsLib.INVALID_CURVE_STEEPNESS);
+        require(curveParams.curveSteepness <= MAX_CURVE_STEEPNESS, ErrorsLib.INVALID_CURVE_STEEPNESS);
 
-        require(cfg.adjustmentSpeed >= 0, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
-        require(cfg.adjustmentSpeed <= MAX_ADJUSTMENT_SPEED, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
+        require(curveParams.adjustmentSpeed >= 0, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
+        require(curveParams.adjustmentSpeed <= MAX_ADJUSTMENT_SPEED, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
 
-        require(cfg.targetUtilization > 0, ErrorsLib.INVALID_TARGET_UTILIZATION);
-        require(cfg.targetUtilization < WAD, ErrorsLib.INVALID_TARGET_UTILIZATION);
+        require(curveParams.targetUtilization > 0, ErrorsLib.INVALID_TARGET_UTILIZATION);
+        require(curveParams.targetUtilization < WAD, ErrorsLib.INVALID_TARGET_UTILIZATION);
 
-        require(cfg.minRateAtTarget > 0, ErrorsLib.INVALID_RATE_BOUNDS);
-        require(cfg.maxRateAtTarget >= cfg.minRateAtTarget, ErrorsLib.INVALID_RATE_BOUNDS);
-        require(cfg.maxRateAtTarget <= MAX_RATE_AT_TARGET_LIMIT, ErrorsLib.INVALID_RATE_BOUNDS);
+        require(curveParams.minRateAtTarget > 0, ErrorsLib.INVALID_RATE_BOUNDS);
+        require(curveParams.maxRateAtTarget >= curveParams.minRateAtTarget, ErrorsLib.INVALID_RATE_BOUNDS);
+        require(curveParams.maxRateAtTarget <= MAX_RATE_AT_TARGET_LIMIT, ErrorsLib.INVALID_RATE_BOUNDS);
 
-        require(cfg.initialRateAtTarget >= cfg.minRateAtTarget, ErrorsLib.INVALID_INITIAL_RATE);
-        require(cfg.initialRateAtTarget <= cfg.maxRateAtTarget, ErrorsLib.INVALID_INITIAL_RATE);
+        require(curveParams.initialRateAtTarget >= curveParams.minRateAtTarget, ErrorsLib.INVALID_INITIAL_RATE);
+        require(curveParams.initialRateAtTarget <= curveParams.maxRateAtTarget, ErrorsLib.INVALID_INITIAL_RATE);
     }
 
     /// @inheritdoc IAdaptiveCurveConfig

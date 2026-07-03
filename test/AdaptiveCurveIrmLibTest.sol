@@ -148,6 +148,22 @@ contract AdaptiveCurveIrmLibTest is Test {
         assertEq(computedBorrowRate, expectedBorrowRate, "computedBorrowRate");
     }
 
+    /// @dev External wrapper: the library function is internal (inlined into the caller's frame), so its revert
+    /// needs its own call frame for `vm.expectRevert` to observe.
+    function exposedBorrowRateView(bytes32 id, Market memory market, address irmAddress)
+        external
+        view
+        returns (uint256)
+    {
+        return AdaptiveCurveIrmLib.borrowRateView(id, market, irmAddress);
+    }
+
+    /// The periphery mirrors the contract's config gate: a market with no config registered cannot be priced.
+    function testBorrowRateViewRevertsWhenConfigNotSet(Market memory market) public {
+        vm.expectRevert(bytes(ErrorsLib.CONFIG_NOT_SET));
+        this.exposedBorrowRateView(keccak256("unconfigured market"), market, adaptiveCurveIrm);
+    }
+
     /// The periphery borrowRateView matches the contract's own view across the full config space.
     function testFuzz_borrowRateView_matchesContract_acrossConfigs(
         int256 curveSteepness,

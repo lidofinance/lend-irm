@@ -7,6 +7,8 @@ import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiv
 
 import "../lib/forge-std/src/Test.sol";
 
+import {CurveRefHelper} from "./CurveRefHelper.sol";
+
 // Minimal ERC-1967 upgradeable proxy, test-only (no admin gating, not production code).
 contract TestERC1967Proxy {
     // bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)
@@ -70,7 +72,7 @@ contract TestERC1967Proxy {
 /// and read under `delegatecall`; its storage (`rateAtTarget`, `marketCurveConfig`, `owner`) lives in the proxy. The
 /// owner is set once through the proxy via `initialize` and rotated with `transferOwnership`. A logic upgrade to a
 /// freshly-constructed implementation preserves the proxy's storage, including the owner.
-contract AdaptiveCurveIrmProxyTest is Test {
+contract AdaptiveCurveIrmProxyTest is Test, CurveRefHelper {
     using MarketParamsLib for MarketParams;
 
     uint256 internal constant SUPPLY = 1_000_000 ether;
@@ -110,15 +112,17 @@ contract AdaptiveCurveIrmProxyTest is Test {
     /// A logic upgrade preserves config, rateAtTarget, and the owner; pricing is unchanged.
     function test_upgrade_logicSwap_preservesState() public {
         address proxy = _wiredProxy(address(this));
-        _adaptUp(proxy);
+        int256 expectedSeed = _adaptUp(proxy);
 
         address configBefore = address(AdaptiveCurveIrm(proxy).marketCurveConfig(id));
         int256 rateBefore = AdaptiveCurveIrm(proxy).rateAtTarget(id);
-        assertGt(rateBefore, int256(0), "rateAtTarget seeded");
+        assertEq(rateBefore, expectedSeed, "rateAtTarget seeded exactly per the reference");
 
         TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this))));
 
-        assertEq(address(AdaptiveCurveIrm(proxy).marketCurveConfig(id)), configBefore, "config persisted across upgrade");
+        assertEq(
+            address(AdaptiveCurveIrm(proxy).marketCurveConfig(id)), configBefore, "config persisted across upgrade"
+        );
         assertEq(AdaptiveCurveIrm(proxy).rateAtTarget(id), rateBefore, "rateAtTarget persisted across upgrade");
         assertEq(AdaptiveCurveIrm(proxy).owner(), address(this), "owner (storage) persisted across upgrade");
     }
@@ -126,11 +130,11 @@ contract AdaptiveCurveIrmProxyTest is Test {
     /// The owner is rotated through the proxy via transferOwnership; no upgrade needed, and state persists.
     function test_transferOwnershipThroughProxy() public {
         address proxy = _wiredProxy(address(this));
-        _adaptUp(proxy);
+        int256 expectedSeed = _adaptUp(proxy);
         address newOwner = makeAddr("newOwner");
 
         int256 rateBefore = AdaptiveCurveIrm(proxy).rateAtTarget(id);
-        assertGt(rateBefore, int256(0), "rateAtTarget seeded");
+        assertEq(rateBefore, expectedSeed, "rateAtTarget seeded exactly per the reference");
 
         AdaptiveCurveIrm(proxy).transferOwnership(newOwner);
 
@@ -147,12 +151,34 @@ contract AdaptiveCurveIrmProxyTest is Test {
         assertEq(AdaptiveCurveIrm(proxy).manager(), address(0xCAFE), "new owner rotated the manager");
     }
 
+    /// The dedup cache (`deployedCurveConfigs`) is proxy storage too: after an upgrade, re-registering the same
+    /// params on another market reuses the config deployed before the upgrade.
+    function test_upgrade_preservesDeployedCurveConfigs() public {
+        address proxy = _wiredProxy(address(this));
+        address configBefore = address(AdaptiveCurveIrm(proxy).marketCurveConfig(id));
+        bytes32 paramsHash = keccak256(abi.encode(_defaultConfig()));
+        assertEq(
+            address(AdaptiveCurveIrm(proxy).deployedCurveConfigs(paramsHash)), configBefore, "cache filled pre-upgrade"
+        );
+
+        TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this))));
+
+        MarketParams memory otherParams = params;
+        otherParams.loanToken = address(0x077E4);
+        AdaptiveCurveIrm(proxy).setMarketCurveParams(otherParams, _defaultConfig());
+        assertEq(
+            address(AdaptiveCurveIrm(proxy).marketCurveConfig(otherParams.id())),
+            configBefore,
+            "the post-upgrade set reused the config cached before the upgrade"
+        );
+    }
+
     /// The EIP-1967 impl/admin pointers live in their own slots, never touching rateAtTarget (slot 0).
     function test_proxyImplAndAdminSlots_doNotCollideWithRateAtTarget() public {
         address proxy = _wiredProxy(address(this));
-        _adaptUp(proxy);
+        int256 expectedSeed = _adaptUp(proxy);
         int256 seededRate = AdaptiveCurveIrm(proxy).rateAtTarget(id);
-        assertGt(seededRate, int256(0), "rateAtTarget seeded in slot 0");
+        assertEq(seededRate, expectedSeed, "rateAtTarget seeded in slot 0, exactly per the reference");
 
         TestERC1967Proxy(payable(proxy)).setAdmin(address(0xADA));
         TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this))));
@@ -192,10 +218,15 @@ contract AdaptiveCurveIrmProxyTest is Test {
         if (owner_ == address(this)) AdaptiveCurveIrm(proxy).setMarketCurveParams(params, _defaultConfig());
     }
 
-    function _adaptUp(address proxy) internal {
-        _poke(proxy, TARGET);
+    /// @dev Seeds and adapts the market up, tracking the EXACT expected rateAtTarget through the reference.
+    function _adaptUp(address proxy) internal returns (int256 expectedRate) {
+        _poke(proxy, TARGET); // first interaction: rateAtTarget := initialRateAtTarget
+        expectedRate = _defaultConfig().initialRateAtTarget;
         for (uint256 i; i < 6; ++i) {
-            _poke(proxy, 0.98 ether);
+            Market memory market = _market(0.98 ether);
+            vm.warp(block.timestamp + 5 days);
+            (, expectedRate) = _refBorrowRate(_defaultConfig(), expectedRate, market);
+            AdaptiveCurveIrm(proxy).borrowRate(params, market);
         }
     }
 

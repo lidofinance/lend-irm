@@ -41,8 +41,11 @@ contract ExpLibTest is Test {
         assertEq(ExpLib.wExp(x), ExpLib.WEXP_UPPER_VALUE);
     }
 
+    /// The multiplication itself is the assertion: under checked arithmetic it reverts if
+    /// `WEXP_UPPER_VALUE * 1e18` overflows int256 (mirrors `testWExpWMulMaxRate`).
     function testWExpDoesNotLeadToOverflow() public {
-        assertGt(ExpLib.WEXP_UPPER_VALUE * 1e18, 0);
+        int256 product = ExpLib.WEXP_UPPER_VALUE * 1e18;
+        assertEq(product / 1e18, ExpLib.WEXP_UPPER_VALUE, "round-trips without overflow");
     }
 
     function testWExpContinuousUpperBound() public {
@@ -50,12 +53,16 @@ contract ExpLibTest is Test {
         assertEq(_wExpUnbounded(ExpLib.WEXP_UPPER_BOUND), ExpLib.WEXP_UPPER_VALUE);
     }
 
+    /// Deliberate inequality (with testWExpNegative, the suite's only two): exp(x) >= 1 for x >= 0 is a domain
+    /// property over ALL of int256 — the clamped edges included — with no exact counterpart (`wadExp` cannot
+    /// price the clamped regions, and a same-algorithm reference would be a tautology).
     function testWExpPositive(int256 x) public {
         x = bound(x, 0, type(int256).max);
 
         assertGe(ExpLib.wExp(x), 1e18);
     }
 
+    /// See testWExpPositive: the mirrored domain property for x <= 0.
     function testWExpNegative(int256 x) public {
         x = bound(x, type(int256).min, 0);
 

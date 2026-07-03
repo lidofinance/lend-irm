@@ -31,15 +31,15 @@ interface IAdaptiveCurveIrm is IIrm {
     /// @notice Address allowed to set market curve params (alongside `owner`).
     function manager() external view returns (address);
 
-    /// @notice Whether the contract has been initialized. Set to true on the implementation at construction (locking
-    /// it) and on the proxy by `initialize`.
+    /// @notice Whether the contract has been initialized.
     function isInitialized() external view returns (bool);
 
-    /// @notice The AdaptiveCurveConfig set for market `id` (zero if none). The curve parameters are read from it
-    /// through an external static call when computing the borrow rate.
+    /// @notice The AdaptiveCurveConfig set for market `id`. Zero if the market has no config. The borrow rate is
+    /// computed from whichever config is currently set.
     function marketCurveConfig(Id id) external view returns (IAdaptiveCurveConfig);
 
-    /// @notice The AdaptiveCurveConfig deployed for `paramsHash = keccak256(abi.encode(Params))`, or zero if none.
+    /// @notice The AdaptiveCurveConfig deployed for `paramsHash = keccak256(abi.encode(curveParams))`. Zero if none
+    /// has been deployed.
     /// @dev Deduplication cache: identical params resolve to one shared config across markets.
     function deployedCurveConfigs(bytes32 paramsHash) external view returns (IAdaptiveCurveConfig);
 
@@ -47,18 +47,20 @@ interface IAdaptiveCurveIrm is IIrm {
     /// @dev Tells the height of the curve.
     function rateAtTarget(Id id) external view returns (int256);
 
-    /// @notice Sets `owner` and `manager` once; reverts if already initialized or either address is zero. Must run
-    /// atomically with proxy deployment.
-    function initialize(address owner_, address manager_) external;
+    /// @notice Initializes the contract, setting `newOwner` as `owner` and `newManager` as `manager`.
+    /// @dev Warning: Deploy the proxy and initialize it atomically (e.g. via constructor calldata), or anyone can
+    /// claim ownership by initializing first.
+    function initialize(address newOwner, address newManager) external;
 
-    /// @notice Sets `owner` to `newOwner`. Owner only; reverts on zero.
+    /// @notice Sets `newOwner` as `owner` of the contract. Can only be called by the owner.
+    /// @dev Warning: No two-step process, so the owner can leave the contract in the hands of a malicious address.
+    /// The owner cannot be renounced (the zero address is rejected).
     function transferOwnership(address newOwner) external;
 
-    /// @notice Sets `manager` to `newManager`. Owner only; reverts on zero.
+    /// @notice Sets `newManager` as `manager` of the contract. Can only be called by the owner.
     function setManager(address newManager) external;
 
     /// @notice Deploys (or reuses, by params hash) an AdaptiveCurveConfig from `curveParams` and sets it as the
-    /// config for market `id = marketParams.id()`. Owner or manager only.
-    function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams)
-        external;
+    /// config for market `id = marketParams.id()`. Can only be called by the owner or the manager.
+    function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams) external;
 }

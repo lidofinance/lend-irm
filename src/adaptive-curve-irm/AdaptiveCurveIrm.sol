@@ -17,6 +17,8 @@ import {MathLib as MorphoMathLib} from "../../lib/morpho-blue/src/libraries/Math
 
 /// @title AdaptiveCurveIrm
 /// @author Morpho Labs. Modified by Lido.
+/// @notice The AdaptiveCurveIRM with per-market immutable curve configs, an optional borrow-rate cap, and
+/// proxy-style initialization.
 contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     using MathLib for int256;
     using UtilsLib for int256;
@@ -55,8 +57,8 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
     /* CONSTRUCTOR & INITIALIZATION */
 
+    /// @dev Locks the implementation contract when it is deployed, preventing it from being initialized.
     /// @param morpho The address of Morpho.
-    /// @dev Marks the implementation contract itself as initialized.
     constructor(address morpho) {
         require(morpho != address(0), ErrorsLib.ZERO_ADDRESS);
 
@@ -65,12 +67,12 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     }
 
     /// @inheritdoc IAdaptiveCurveIrm
-    function initialize(address owner_, address manager_) external {
+    function initialize(address newOwner, address newManager) external {
         require(!isInitialized, ErrorsLib.ALREADY_INITIALIZED);
 
         isInitialized = true;
-        _transferOwnership(owner_);
-        _setManager(manager_);
+        _transferOwnership(newOwner);
+        _setManager(newManager);
     }
 
     /* OWNERSHIP & MANAGEMENT */
@@ -87,12 +89,25 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
         _setManager(newManager);
     }
 
+    function _transferOwnership(address newOwner) internal {
+        require(newOwner != address(0), ErrorsLib.ZERO_ADDRESS);
+
+        address previousOwner = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(previousOwner, newOwner);
+    }
+
+    function _setManager(address newManager) internal {
+        require(newManager != address(0), ErrorsLib.ZERO_ADDRESS);
+
+        manager = newManager;
+        emit ManagerSet(newManager);
+    }
+
     /* CONFIG MANAGEMENT */
 
     /// @inheritdoc IAdaptiveCurveIrm
-    function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams)
-        external
-    {
+    function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams) external {
         require(msg.sender == owner || msg.sender == manager, ErrorsLib.NOT_AUTHORIZED);
 
         Id id = marketParams.id();
@@ -140,15 +155,16 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     function _borrowRate(Id id, Market memory market) private view returns (uint256, int256) {
         IAdaptiveCurveConfig curveConfig = marketCurveConfig[id];
         require(address(curveConfig) != address(0), ErrorsLib.CONFIG_NOT_SET);
-        AdaptiveCurveParams memory params = curveConfig.getCurveParams();
+        AdaptiveCurveParams memory curveParams = curveConfig.getCurveParams();
 
         // Safe "unchecked" cast because the utilization is smaller than 1 (scaled by WAD).
         int256 utilization =
             int256(market.totalSupplyAssets > 0 ? market.totalBorrowAssets.wDivDown(market.totalSupplyAssets) : 0);
 
-        int256 errNormFactor =
-            utilization > params.targetUtilization ? WAD - params.targetUtilization : params.targetUtilization;
-        int256 err = (utilization - params.targetUtilization).wDivToZero(errNormFactor);
+        int256 errNormFactor = utilization > curveParams.targetUtilization
+            ? WAD - curveParams.targetUtilization
+            : curveParams.targetUtilization;
+        int256 err = (utilization - curveParams.targetUtilization).wDivToZero(errNormFactor);
 
         int256 startRateAtTarget = rateAtTarget[id];
 
@@ -157,12 +173,12 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
         if (startRateAtTarget == 0) {
             // First interaction.
-            avgRateAtTarget = params.initialRateAtTarget;
-            endRateAtTarget = params.initialRateAtTarget;
+            avgRateAtTarget = curveParams.initialRateAtTarget;
+            endRateAtTarget = curveParams.initialRateAtTarget;
         } else {
             // The speed is assumed constant between two updates, but it is in fact not constant because of interest.
             // So the rate is always underestimated.
-            int256 speed = params.adjustmentSpeed.wMulToZero(err);
+            int256 speed = curveParams.adjustmentSpeed.wMulToZero(err);
             // market.lastUpdate != 0 because it is not the first interaction with this market.
             // Safe "unchecked" cast because block.timestamp - market.lastUpdate <= block.timestamp <= type(int256).max.
             int256 elapsed = int256(block.timestamp - market.lastUpdate);
@@ -186,18 +202,18 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
                 // With N = 2:
                 // avg ~= curve([(startRateAtTarget + endRateAtTarget)/2 + startRateAtTarget*exp(speed*T/2)] / 2, err)
                 // avg ~= curve([startRateAtTarget + endRateAtTarget + 2*startRateAtTarget*exp(speed*T/2)] / 4, err)
-                endRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation, params);
-                int256 midRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation / 2, params);
+                endRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation, curveParams);
+                int256 midRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation / 2, curveParams);
                 avgRateAtTarget = (startRateAtTarget + endRateAtTarget + 2 * midRateAtTarget) / 4;
             }
         }
 
         // Safe "unchecked" cast because avgRateAtTarget >= 0.
-        uint256 rate = uint256(_curve(avgRateAtTarget, err, params.curveSteepness));
+        uint256 rate = uint256(_curve(avgRateAtTarget, err, curveParams.curveSteepness));
 
         // Hard cap: clamp the charged rate to maxBorrowRate, leaving endRateAtTarget untouched. Adaptation is
         // err-driven, not rate-driven, so the state machine is unchanged and only the reported rate is bounded.
-        if (params.maxBorrowRate != 0 && rate > params.maxBorrowRate) rate = params.maxBorrowRate;
+        if (curveParams.maxBorrowRate != 0 && rate > curveParams.maxBorrowRate) rate = curveParams.maxBorrowRate;
 
         return (rate, endRateAtTarget);
     }
@@ -215,30 +231,13 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
     /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, AdaptiveCurveParams memory cfg)
+    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, AdaptiveCurveParams memory curveParams)
         private
         pure
         returns (int256)
     {
         // Non negative because minRateAtTarget > 0.
-        return
-            startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(cfg.minRateAtTarget, cfg.maxRateAtTarget);
-    }
-
-    /// @dev Sets `owner` to `newOwner`, reverting on the zero address, and emits `OwnershipTransferred`.
-    function _transferOwnership(address newOwner) internal {
-        require(newOwner != address(0), ErrorsLib.ZERO_ADDRESS);
-
-        address previousOwner = owner;
-        owner = newOwner;
-        emit OwnershipTransferred(previousOwner, newOwner);
-    }
-
-    /// @dev Sets `manager` to `newManager`, reverting on the zero address, and emits `ManagerSet`.
-    function _setManager(address newManager) internal {
-        require(newManager != address(0), ErrorsLib.ZERO_ADDRESS);
-
-        manager = newManager;
-        emit ManagerSet(newManager);
+        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation))
+            .bound(curveParams.minRateAtTarget, curveParams.maxRateAtTarget);
     }
 }

@@ -4,31 +4,30 @@ pragma solidity >=0.5.0;
 import {AdaptiveCurveParams} from "./IAdaptiveCurveTypes.sol";
 
 /// @title IAdaptiveCurveConfig
-/// @author Morpho Labs. Modified by Lido.
-/// @notice Interface exposed by an AdaptiveCurveConfig: an immutable holder of one curve's parameters, deployed per
-/// market by the AdaptiveCurveIrm and read by it through an external static call.
+/// @author Lido.
+/// @notice Interface exposed by an AdaptiveCurveConfig: an immutable holder of one curve's parameters.
 interface IAdaptiveCurveConfig {
-    /// @notice `Params.curveSteepness`.
+    /// @notice `AdaptiveCurveParams.curveSteepness`.
     function CURVE_STEEPNESS() external view returns (int256);
 
-    /// @notice `Params.adjustmentSpeed`.
+    /// @notice `AdaptiveCurveParams.adjustmentSpeed`.
     function ADJUSTMENT_SPEED() external view returns (int256);
 
-    /// @notice `Params.targetUtilization`.
+    /// @notice `AdaptiveCurveParams.targetUtilization`.
     function TARGET_UTILIZATION() external view returns (int256);
 
-    /// @notice `Params.initialRateAtTarget`.
+    /// @notice `AdaptiveCurveParams.initialRateAtTarget`.
     function INITIAL_RATE_AT_TARGET() external view returns (int256);
 
-    /// @notice `Params.minRateAtTarget`.
+    /// @notice `AdaptiveCurveParams.minRateAtTarget`.
     function MIN_RATE_AT_TARGET() external view returns (int256);
 
-    /// @notice `Params.maxRateAtTarget`.
+    /// @notice `AdaptiveCurveParams.maxRateAtTarget`.
     function MAX_RATE_AT_TARGET() external view returns (int256);
 
-    /// @notice `Params.maxBorrowRate`.
+    /// @notice `AdaptiveCurveParams.maxBorrowRate`.
     function MAX_BORROW_RATE() external view returns (uint256);
 
-    /// @notice Returns the full `Params` frozen into this contract's immutables.
+    /// @notice The full `AdaptiveCurveParams` held by this config.
     function getCurveParams() external view returns (AdaptiveCurveParams memory);
 }

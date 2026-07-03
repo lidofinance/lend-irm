@@ -37,11 +37,15 @@ jobs:
       - name: Install certora
         run: pip install certora-cli
 
-      - name: Install solc (0.8.35)
+      # 0.8.35 compiles the IRM sources; 0.8.19 compiles lib/morpho-blue's core (exact-pinned pragma),
+      # per the solc_map in ExpectedMarketBalances.conf.
+      - name: Install solc (0.8.35, 0.8.19)
         run: |
-          wget https://github.com/ethereum/solidity/releases/download/v0.8.35/solc-static-linux
-          chmod +x solc-static-linux
-          sudo mv solc-static-linux /usr/local/bin/solc-0.8.35
+          for v in 0.8.35 0.8.19; do
+            wget -O "solc-$v" "https://github.com/ethereum/solidity/releases/download/v$v/solc-static-linux"
+            chmod +x "solc-$v"
+            sudo mv "solc-$v" "/usr/local/bin/solc-$v"
+          done
 
       - name: Verify ${{ matrix.conf }}
         run: certoraRun certora/confs/${{ matrix.conf }}.conf

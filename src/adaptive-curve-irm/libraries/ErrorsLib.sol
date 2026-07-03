@@ -17,7 +17,7 @@ library ErrorsLib {
     /// @dev Thrown when the caller of setMarketCurveParams is neither the owner nor the manager.
     string internal constant NOT_AUTHORIZED = "not authorized";
 
-    /// @dev Thrown when `initialize` is called after the owner is already set.
+    /// @dev Thrown when `initialize` is called on an already-initialized contract.
     string internal constant ALREADY_INITIALIZED = "already initialized";
 
     /// @dev Thrown when a borrow rate is requested for a market that has no config set.

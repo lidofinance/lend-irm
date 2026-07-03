@@ -8,12 +8,14 @@ import "../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
+import {CurveRefHelper} from "./CurveRefHelper.sol";
+
 /// Reparametrization in the per-market-config model: re-registering a new AdaptiveCurveConfig under the SAME id swaps
 /// the market's curve. The dynamics (snap on the next adapting call, lazy re-clamp, whole-interval repricing) are
 /// emergent
 /// from reading whichever config is currently registered + the unchanged curve math + the persisted rateAtTarget — no
 /// proxy involved. Variant A allows the re-registration these tests exercise.
-contract AdaptiveCurveIrmReparamTest is Test {
+contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
     using MarketParamsLib for MarketParams;
 
     int256 internal constant Y = 365 days;
@@ -45,14 +47,15 @@ contract AdaptiveCurveIrmReparamTest is Test {
 
         int256 rateBefore = _rateAtTarget();
         int256 newMinRate = rateBefore * 3 / 2;
-        _reparam(_config(newMinRate, newMinRate, newMinRate * 4));
+        AdaptiveCurveParams memory newConfig = _config(newMinRate, newMinRate, newMinRate * 4);
+        _reparam(newConfig);
 
         assertEq(_rateAtTarget(), rateBefore, "stored rate unchanged until the next adapting call");
 
-        _poke(0.95 ether);
-        int256 rateAfter = _rateAtTarget();
-        assertGe(rateAfter, newMinRate, "rate clamped up to the new MIN");
-        assertGt(rateAfter, rateBefore, "rate jumped up after the reparametrization (the spike)");
+        // The 5-day above-target drift alone grows the rate by only ~e^0.137, so the new MIN (1.5x) binds:
+        // the spike lands exactly on it.
+        int256 rateAfter = _pokeExpecting(newConfig, 0.95 ether);
+        assertEq(rateAfter, newMinRate, "the up-snap lands exactly on the new MIN");
     }
 
     /// A new MAX below the stored rate snaps rateAtTarget down on the next adapting call.
@@ -62,14 +65,14 @@ contract AdaptiveCurveIrmReparamTest is Test {
 
         int256 rateBefore = _rateAtTarget();
         int256 newMaxRate = rateBefore * 2 / 3;
-        _reparam(_config(newMaxRate, rateBefore / 4, newMaxRate));
+        AdaptiveCurveParams memory newConfig = _config(newMaxRate, rateBefore / 4, newMaxRate);
+        _reparam(newConfig);
 
         assertEq(_rateAtTarget(), rateBefore, "stored rate unchanged until the next adapting call");
 
-        _poke(0.95 ether);
-        int256 rateAfter = _rateAtTarget();
-        assertLe(rateAfter, newMaxRate, "rate clamped down to the new MAX");
-        assertLt(rateAfter, rateBefore, "rate jumped down after the reparametrization");
+        // The above-target poke drifts the rate UP, so the new MAX (2/3x) binds: the drop lands exactly on it.
+        int256 rateAfter = _pokeExpecting(newConfig, 0.95 ether);
+        assertEq(rateAfter, newMaxRate, "the down-snap lands exactly on the new MAX");
     }
 
     /// The cap applies after registration and a tighter cap takes effect on the next call.
@@ -108,6 +111,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
 
         int256 rateBefore = _rateAtTarget();
         uint256 chargedBefore = irm.borrowRateView(params, _market(TARGET));
+        assertEq(chargedBefore, uint256(rateBefore), "at target the charged rate equals the stored rate");
 
         int256 capRate = rateBefore / 2;
         AdaptiveCurveParams memory cappedConfig = _config(rateBefore, rateBefore / 2, rateBefore * 2);
@@ -118,7 +122,6 @@ contract AdaptiveCurveIrmReparamTest is Test {
 
         uint256 chargedAfter = irm.borrowRateView(params, _market(TARGET));
         assertEq(chargedAfter, uint256(capRate), "charged rate clamped to the new cap on the next call");
-        assertLt(chargedAfter, chargedBefore, "charged rate dropped after the reparametrization");
         assertEq(_rateAtTarget(), rateBefore, "the cap did not touch rateAtTarget");
     }
 
@@ -129,19 +132,23 @@ contract AdaptiveCurveIrmReparamTest is Test {
 
         int256 rateBefore = _rateAtTarget();
         int256 newMaxRate = rateBefore / 2;
-        _reparam(_config(newMaxRate, int256(0.005 ether) / Y, newMaxRate));
+        AdaptiveCurveParams memory newConfig = _config(newMaxRate, int256(0.005 ether) / Y, newMaxRate);
+        _reparam(newConfig);
 
-        _poke(TARGET);
+        // The at-target poke (err == 0) leaves the stored rate EXACTLY where it was — still above the new MAX
+        // (it equals 2 * newMaxRate): the rebound is deferred.
+        _pokeExpecting(newConfig, TARGET);
         assertEq(_rateAtTarget(), rateBefore, "at-target poke leaves the stored rate unbounded");
-        assertGt(_rateAtTarget(), newMaxRate, "rateAtTarget still above the new MAX (rebound deferred)");
         assertEq(
             irm.borrowRateView(params, _market(TARGET)),
             uint256(rateBefore),
             "uncapped: the stale above-MAX rate is charged as-is"
         );
 
-        _poke(0.3 ether);
-        assertLe(_rateAtTarget(), newMaxRate, "off-target poke re-bounds rateAtTarget down to the new MAX");
+        // The off-target poke's own downward drift (~e^-0.18) does not reach MAX/2, so the clamp binds: the
+        // re-bound lands exactly on the new MAX.
+        _pokeExpecting(newConfig, 0.3 ether);
+        assertEq(_rateAtTarget(), newMaxRate, "off-target poke re-bounds exactly onto the new MAX");
     }
 
     /// Widening lets rateAtTarget creep up; a later narrowing snaps it onto the new ceiling in one step.
@@ -157,24 +164,23 @@ contract AdaptiveCurveIrmReparamTest is Test {
         _reparam(_config(initialMaxRate, initialMinRate, wideMaxRate));
         assertEq(_rateAtTarget(), initialMaxRate, "widen alone does not move the stored rate");
 
-        // Off-target above target makes rateAtTarget creep up, step by step, but stay under the widened ceiling.
-        int256 beforeCrawl = _rateAtTarget();
-        _crawl(0.98 ether, 1 hours, 1);
-        int256 afterFirstHour = _rateAtTarget();
-        _crawl(0.98 ether, 1 hours, 11); // 12h total
-        int256 crept = _rateAtTarget();
+        // Off-target above target makes rateAtTarget creep up: every hourly step is checked EXACTLY against the
+        // reference, and after 12h the crept rate has not reached the widened ceiling (creep, not snap).
+        AdaptiveCurveParams memory wideConfig = _config(initialMaxRate, initialMinRate, wideMaxRate);
+        int256 crept;
+        for (uint256 i; i < 12; ++i) {
+            crept = _pokeExpecting(wideConfig, 0.98 ether, 1 hours);
+        }
+        assertTrue(crept != wideMaxRate, "creep stays below the widened ceiling (creep, not snap)");
 
-        assertGt(afterFirstHour, beforeCrawl, "rate creeps up after the first off-target step");
-        assertGt(crept, afterFirstHour, "rate keeps creeping up over more steps");
-        assertLt(crept, wideMaxRate, "creep stays below the widened ceiling (creep, not snap)");
-
-        // Narrow the ceiling below the crept rate: unchanged until the next adapting call, then snapped in one step.
+        // Narrow the ceiling below the crept rate (it sits above tightMax by construction: it crept up from
+        // initialMaxRate == 0.05/yr > 0.03/yr): unchanged until the next adapting call, then snapped in one step.
         int256 tightMaxRate = int256(0.03 ether) / Y;
-        _reparam(_config(tightMaxRate, initialMinRate, tightMaxRate));
+        AdaptiveCurveParams memory tightConfig = _config(tightMaxRate, initialMinRate, tightMaxRate);
+        _reparam(tightConfig);
         assertEq(_rateAtTarget(), crept, "narrow alone leaves the crept rate unchanged");
-        assertGt(crept, tightMaxRate, "the crept rate is above the new tight ceiling");
 
-        _crawl(0.98 ether, 1 hours, 1);
+        _pokeExpecting(tightConfig, 0.98 ether, 1 hours);
         assertEq(_rateAtTarget(), tightMaxRate, "shock: snapped exactly onto the new tight ceiling in one step");
     }
 
@@ -184,15 +190,26 @@ contract AdaptiveCurveIrmReparamTest is Test {
         _poke(TARGET);
 
         int256 storedRate = _rateAtTarget();
-        uint256 chargedBefore = irm.borrowRateView(params, _market(0.8 ether));
+        (uint256 expectedBefore,) = _refBorrowRate(_defaultConfig(), storedRate, _market(0.8 ether));
+        assertEq(
+            irm.borrowRateView(params, _market(0.8 ether)),
+            expectedBefore,
+            "below the old target: the down-branch of the curve"
+        );
 
         AdaptiveCurveParams memory newConfig = _config(storedRate, storedRate / 2, storedRate * 2);
         newConfig.targetUtilization = int256(0.5 ether);
         _reparam(newConfig);
 
         assertEq(_rateAtTarget(), storedRate, "target change does not move the stored rate");
-        uint256 chargedAfter = irm.borrowRateView(params, _market(0.8 ether));
-        assertGt(chargedAfter, chargedBefore, "same utilization charges more after the target moves below it");
+        // The same utilization now sits ABOVE the target: the reference (with the new target) prices it on the
+        // up-branch of the curve.
+        (uint256 expectedAfter,) = _refBorrowRate(newConfig, storedRate, _market(0.8 ether));
+        assertEq(
+            irm.borrowRateView(params, _market(0.8 ether)),
+            expectedAfter,
+            "the new target reprices the same utilization on the up-branch"
+        );
     }
 
     /// Changing curveSteepness shifts the charged rate above target, without moving rateAtTarget.
@@ -201,15 +218,22 @@ contract AdaptiveCurveIrmReparamTest is Test {
         _poke(TARGET);
 
         int256 storedRate = _rateAtTarget();
-        uint256 chargedBefore = irm.borrowRateView(params, _market(0.98 ether));
+        (uint256 expectedBefore,) = _refBorrowRate(_defaultConfig(), storedRate, _market(0.98 ether));
+        assertEq(
+            irm.borrowRateView(params, _market(0.98 ether)), expectedBefore, "above target under the old steepness"
+        );
 
         AdaptiveCurveParams memory newConfig = _config(storedRate, storedRate / 2, storedRate * 2);
         newConfig.curveSteepness = int256(4 ether);
         _reparam(newConfig);
 
         assertEq(_rateAtTarget(), storedRate, "steepness change does not move the stored rate");
-        uint256 chargedAfter = irm.borrowRateView(params, _market(0.98 ether));
-        assertGt(chargedAfter, chargedBefore, "steeper curve charges more above target at the same utilization");
+        (uint256 expectedAfter,) = _refBorrowRate(newConfig, storedRate, _market(0.98 ether));
+        assertEq(
+            irm.borrowRateView(params, _market(0.98 ether)),
+            expectedAfter,
+            "the steeper curve reprices the same utilization exactly per the reference"
+        );
     }
 
     /// The first call after reparametrization prices the whole interval since lastUpdate at the new params.
@@ -255,22 +279,22 @@ contract AdaptiveCurveIrmReparamTest is Test {
             _rateAtTarget(), rateBefore, "adjustmentSpeed change does not move the stored rate at reparametrization"
         );
 
-        // One off-target step under the fast speed.
-        _poke(0.3 ether);
-        int256 fastRate = _rateAtTarget();
+        // One off-target step under the fast speed, checked exactly against the reference (the 4x speed is in
+        // the exponent of the expected adaptation).
+        int256 fastRate = _pokeExpecting(fasterConfig, 0.3 ether);
 
-        // Control: same start and same 5-day step under the ORIGINAL (slow) speed.
+        // Control: same start and same 5-day step under the ORIGINAL (slow) speed, also exact per the reference.
         AdaptiveCurveParams memory slowerConfig = _config(rateBefore, rateBefore / 4, rateBefore * 4);
         slowerConfig.adjustmentSpeed = int256(20 ether) / Y;
         (AdaptiveCurveIrm control, MarketParams memory controlParams) = _seededControl(slowerConfig, rateBefore);
         Market memory controlMarket = _market(0.3 ether);
         vm.warp(block.timestamp + 5 days);
+        (, int256 expectedSlowRate) = _refBorrowRate(slowerConfig, rateBefore, controlMarket);
         control.borrowRate(controlParams, controlMarket);
         int256 slowRate = control.rateAtTarget(controlParams.id());
+        assertEq(slowRate, expectedSlowRate, "the slow control matches the reference");
 
-        // Both adapt down; the faster speed moves the rate further in the same step.
-        assertLt(fastRate, rateBefore, "rate adapted down");
-        assertLt(fastRate, slowRate, "faster adjustmentSpeed adapts further in the same step");
+        assertTrue(fastRate != slowRate, "the two speeds land on different rates for the same step");
     }
 
     /// The periphery matches the contract and follows the new config after a reparametrization.
@@ -397,6 +421,24 @@ contract AdaptiveCurveIrmReparamTest is Test {
 
     function _poke(uint256 utilizationWad) internal {
         _pokeFor(utilizationWad, 5 days);
+    }
+
+    /// @dev A `_pokeFor` whose charged rate and resulting rateAtTarget are checked EXACTLY against the reference
+    /// under `activeConfig` (the params currently registered for the market). Returns the new rateAtTarget.
+    function _pokeExpecting(AdaptiveCurveParams memory activeConfig, uint256 utilizationWad) internal returns (int256) {
+        return _pokeExpecting(activeConfig, utilizationWad, 5 days);
+    }
+
+    function _pokeExpecting(AdaptiveCurveParams memory activeConfig, uint256 utilizationWad, uint256 elapsed)
+        internal
+        returns (int256 endRate)
+    {
+        Market memory market = _market(utilizationWad);
+        vm.warp(block.timestamp + elapsed);
+        (uint256 expectedRate, int256 expectedEndRate) = _refBorrowRate(activeConfig, _rateAtTarget(), market);
+        assertEq(irm.borrowRate(params, market), expectedRate, "charged rate matches the reference");
+        endRate = _rateAtTarget();
+        assertEq(endRate, expectedEndRate, "rateAtTarget matches the reference");
     }
 
     function _pokeFor(uint256 utilizationWad, uint256 elapsed) internal {

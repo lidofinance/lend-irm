@@ -16,6 +16,7 @@ import {UtilsLib as MorphoUtilsLib} from "../../../../lib/morpho-blue/src/librar
 
 /// @dev Library to compute borrowRateView and expectedMarketBalances with only the market id.
 /// @dev Must be used only for markets with an AdaptiveCurveIrm as irm.
+/// @dev Reverts with `CONFIG_NOT_SET` when the market has no config registered on the IRM.
 library AdaptiveCurveIrmLib {
     using MathLib for int256;
     using UtilsLib for int256;
@@ -75,7 +76,7 @@ library AdaptiveCurveIrmLib {
         view
         returns (uint256, int256)
     {
-        // Curve parameters live in the per-market AdaptiveCurveConfig. Resolve it from the IRM and read it through an
+        // Curve parameters live in the market's AdaptiveCurveConfig. Resolve it from the IRM and read it through an
         // external static call, mirroring the IRM. A market with no config set cannot be priced.
         IAdaptiveCurveConfig config = IAdaptiveCurveIrm(adaptiveCurveIrm).marketCurveConfig(id);
         require(address(config) != address(0), ErrorsLib.CONFIG_NOT_SET);
