@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 
-import {IMarketConfig} from "./interfaces/IMarketConfig.sol";
+import {IAdaptiveCurveConfig} from "./interfaces/IAdaptiveCurveConfig.sol";
+import {AdaptiveCurveParams} from "./interfaces/IAdaptiveCurveTypes.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
 import {WAD_INT as WAD} from "./libraries/MathLib.sol";
 
-/// @title MarketConfig
+/// @title AdaptiveCurveConfig
 /// @author Lido.
 /// @notice Immutable holder of one curve's parameters. The factory deploys one per market and the AdaptiveCurveIrm
-/// reads it through an external static call (`getConfig()`). Parameters are validated at construction and frozen.
-contract MarketConfig is IMarketConfig {
+/// reads it through an external static call (`getCurveParams()`). Parameters are validated at construction and frozen.
+contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
     /* IMMUTABLES */
 
-    int256 internal immutable CURVE_STEEPNESS;
-    int256 internal immutable ADJUSTMENT_SPEED;
-    int256 internal immutable TARGET_UTILIZATION;
-    int256 internal immutable INITIAL_RATE_AT_TARGET;
-    int256 internal immutable MIN_RATE_AT_TARGET;
-    int256 internal immutable MAX_RATE_AT_TARGET;
-    uint256 internal immutable MAX_BORROW_RATE;
+    int256 public immutable CURVE_STEEPNESS;
+    int256 public immutable ADJUSTMENT_SPEED;
+    int256 public immutable TARGET_UTILIZATION;
+    int256 public immutable INITIAL_RATE_AT_TARGET;
+    int256 public immutable MIN_RATE_AT_TARGET;
+    int256 public immutable MAX_RATE_AT_TARGET;
+    uint256 public immutable MAX_BORROW_RATE;
 
     /* CONSTANTS */
 
@@ -34,7 +35,7 @@ contract MarketConfig is IMarketConfig {
     /* CONSTRUCTOR */
 
     /// @notice Validates `cfg` and freezes it into immutables.
-    constructor(Config memory cfg) {
+    constructor(AdaptiveCurveParams memory cfg) {
         _validateConfig(cfg);
 
         CURVE_STEEPNESS = cfg.curveSteepness;
@@ -49,28 +50,27 @@ contract MarketConfig is IMarketConfig {
     /// @dev Reverts unless `cfg` is a valid curve configuration, with a per-parameter error message. The bounds
     /// (upper limits included) keep the curve math inside its non-overflowing range, so `borrowRate` returns a
     /// non-negative rate without reverting. They enforce well-formedness only, not economic soundness.
-    function _validateConfig(Config memory cfg) private pure {
-        require(
-            cfg.curveSteepness >= WAD && cfg.curveSteepness <= MAX_CURVE_STEEPNESS, ErrorsLib.INVALID_CURVE_STEEPNESS
-        );
-        require(
-            cfg.adjustmentSpeed >= 0 && cfg.adjustmentSpeed <= MAX_ADJUSTMENT_SPEED, ErrorsLib.INVALID_ADJUSTMENT_SPEED
-        );
-        require(cfg.targetUtilization > 0 && cfg.targetUtilization < WAD, ErrorsLib.INVALID_TARGET_UTILIZATION);
-        require(
-            cfg.minRateAtTarget > 0 && cfg.maxRateAtTarget >= cfg.minRateAtTarget
-                && cfg.maxRateAtTarget <= MAX_RATE_AT_TARGET_LIMIT,
-            ErrorsLib.INVALID_RATE_BOUNDS
-        );
-        require(
-            cfg.initialRateAtTarget >= cfg.minRateAtTarget && cfg.initialRateAtTarget <= cfg.maxRateAtTarget,
-            ErrorsLib.INVALID_INITIAL_RATE
-        );
+    function _validateConfig(AdaptiveCurveParams memory cfg) private pure {
+        require(cfg.curveSteepness >= WAD, ErrorsLib.INVALID_CURVE_STEEPNESS);
+        require(cfg.curveSteepness <= MAX_CURVE_STEEPNESS, ErrorsLib.INVALID_CURVE_STEEPNESS);
+
+        require(cfg.adjustmentSpeed >= 0, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
+        require(cfg.adjustmentSpeed <= MAX_ADJUSTMENT_SPEED, ErrorsLib.INVALID_ADJUSTMENT_SPEED);
+
+        require(cfg.targetUtilization > 0, ErrorsLib.INVALID_TARGET_UTILIZATION);
+        require(cfg.targetUtilization < WAD, ErrorsLib.INVALID_TARGET_UTILIZATION);
+
+        require(cfg.minRateAtTarget > 0, ErrorsLib.INVALID_RATE_BOUNDS);
+        require(cfg.maxRateAtTarget >= cfg.minRateAtTarget, ErrorsLib.INVALID_RATE_BOUNDS);
+        require(cfg.maxRateAtTarget <= MAX_RATE_AT_TARGET_LIMIT, ErrorsLib.INVALID_RATE_BOUNDS);
+
+        require(cfg.initialRateAtTarget >= cfg.minRateAtTarget, ErrorsLib.INVALID_INITIAL_RATE);
+        require(cfg.initialRateAtTarget <= cfg.maxRateAtTarget, ErrorsLib.INVALID_INITIAL_RATE);
     }
 
-    /// @inheritdoc IMarketConfig
-    function getConfig() external view returns (Config memory) {
-        return Config({
+    /// @inheritdoc IAdaptiveCurveConfig
+    function getCurveParams() external view returns (AdaptiveCurveParams memory) {
+        return AdaptiveCurveParams({
             curveSteepness: CURVE_STEEPNESS,
             adjustmentSpeed: ADJUSTMENT_SPEED,
             targetUtilization: TARGET_UTILIZATION,

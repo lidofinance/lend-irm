@@ -2,12 +2,12 @@
 pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
-import {MarketConfigFactory} from "../src/adaptive-curve-irm/MarketConfigFactory.sol";
-import {IMarketConfig} from "../src/adaptive-curve-irm/interfaces/IMarketConfig.sol";
+import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
+import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 import "../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
-import "../lib/lido-lend/src/interfaces/IMorpho.sol";
-import {MorphoBalancesLib} from "../lib/lido-lend/src/libraries/periphery/MorphoBalancesLib.sol";
+import "../lib/morpho-blue/src/interfaces/IMorpho.sol";
+import {MorphoBalancesLib} from "../lib/morpho-blue/src/libraries/periphery/MorphoBalancesLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
@@ -17,21 +17,24 @@ contract AdaptiveCurveIrmLibTest is Test {
     using MathLib for uint256;
 
     address public adaptiveCurveIrm;
-    MarketConfigFactory internal factory;
 
     function setUp() public {
-        factory = new MarketConfigFactory();
         adaptiveCurveIrm = _deploy();
     }
 
-    /// @dev A bare IRM bound to the shared factory, with the test as morpho and owner (so it can set configs).
+    /// @dev A bare IRM with the test as morpho and owner (so it can set configs).
     function _deploy() internal returns (address) {
-        return address(new AdaptiveCurveIrm(address(this), address(this)));
+        AdaptiveCurveIrm irm_ = new AdaptiveCurveIrm(address(this));
+        // The constructor locks the implementation (isInitialized=true); it packs into slot 4 alongside `manager`.
+        // Clear the slot so this direct-deploy (not behind a proxy) can be initialized with the test as owner+manager.
+        vm.store(address(irm_), bytes32(uint256(4)), bytes32(0));
+        irm_.initialize(address(this), address(this));
+        return address(irm_);
     }
 
     /// @dev The periphery's target curve: default constants with a configurable cap, so tests can vary just the cap.
-    function _config(uint256 maxBorrowRate) internal pure returns (IMarketConfig.Config memory) {
-        return IMarketConfig.Config({
+    function _config(uint256 maxBorrowRate) internal pure returns (AdaptiveCurveParams memory) {
+        return AdaptiveCurveParams({
             curveSteepness: ConstantsLib.CURVE_STEEPNESS,
             adjustmentSpeed: ConstantsLib.ADJUSTMENT_SPEED,
             targetUtilization: ConstantsLib.TARGET_UTILIZATION,
@@ -42,9 +45,11 @@ contract AdaptiveCurveIrmLibTest is Test {
         });
     }
 
-    /// @dev Deploys a MarketConfig via the factory and points `irmAddress` at it for `id`.
-    function _register(address irmAddress, bytes32 id, IMarketConfig.Config memory config) internal {
-        AdaptiveCurveIrm(irmAddress).setConfig(Id.wrap(id), factory.createConfig(config));
+    /// @dev Points `irmAddress` at it for `marketParams.id()` (the IRM deploys/dedups the config itself).
+    function _register(address irmAddress, MarketParams memory marketParams, AdaptiveCurveParams memory config)
+        internal
+    {
+        AdaptiveCurveIrm(irmAddress).setMarketCurveParams(marketParams, config);
     }
 
     function testExpectedMarketBalances(
@@ -79,7 +84,9 @@ contract AdaptiveCurveIrmLibTest is Test {
             loanToken: address(0), collateralToken: address(0), oracle: address(0), irm: adaptiveCurveIrm, lltv: 0
         });
         bytes32 id = Id.unwrap(marketParams.id());
-        _register(adaptiveCurveIrm, id, _config(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET))));
+        _register(
+            adaptiveCurveIrm, marketParams, _config(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET)))
+        );
 
         address morpho = makeAddr("morpho");
         _setRateAtTarget(adaptiveCurveIrm, id, rateAtTarget);
@@ -128,7 +135,9 @@ contract AdaptiveCurveIrmLibTest is Test {
         MarketParams memory marketParams;
         marketParams.irm = adaptiveCurveIrm;
         bytes32 id = Id.unwrap(marketParams.id());
-        _register(adaptiveCurveIrm, id, _config(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET))));
+        _register(
+            adaptiveCurveIrm, marketParams, _config(bound(maxBorrowRate, 0, uint256(ConstantsLib.MAX_RATE_AT_TARGET)))
+        );
 
         // set rate at target.
         _setRateAtTarget(adaptiveCurveIrm, id, rateAtTarget);
@@ -153,7 +162,7 @@ contract AdaptiveCurveIrmLibTest is Test {
         Market memory market
     ) public {
         vm.warp(1000 days);
-        IMarketConfig.Config memory config = _boundedConfig(
+        AdaptiveCurveParams memory config = _boundedConfig(
             curveSteepness, adjustmentSpeed, targetUtilization, minRate, maxRate, initialRate, maxBorrowRate, capEnabled
         );
         address irmAddress = _deploy();
@@ -161,7 +170,7 @@ contract AdaptiveCurveIrmLibTest is Test {
         MarketParams memory marketParams;
         marketParams.irm = irmAddress;
         bytes32 id = Id.unwrap(marketParams.id());
-        _register(irmAddress, id, config);
+        _register(irmAddress, marketParams, config);
 
         rateAtTarget = bound(rateAtTarget, 0, uint256(config.maxRateAtTarget));
         market.totalBorrowAssets = uint128(bound(market.totalBorrowAssets, 0, market.totalSupplyAssets));
@@ -177,7 +186,7 @@ contract AdaptiveCurveIrmLibTest is Test {
         assertEq(fromLib, fromContract, "periphery matches the contract across the config space");
     }
 
-    /// @dev Squeezes raw fuzz inputs into an always-valid `Config`, so the periphery-equivalence fuzzer can vary the
+    /// @dev Squeezes raw fuzz inputs into an always-valid `Params`, so the periphery-equivalence fuzzer can vary the
     /// whole curve.
     function _boundedConfig(
         int256 curveSteepness,
@@ -188,7 +197,7 @@ contract AdaptiveCurveIrmLibTest is Test {
         int256 initialRate,
         uint256 maxBorrowRate,
         bool capEnabled
-    ) internal view returns (IMarketConfig.Config memory config) {
+    ) internal view returns (AdaptiveCurveParams memory config) {
         int256 rateCeil = int256(10_000 ether) / int256(365 days); // MAX_RATE_AT_TARGET_LIMIT
         int256 speedCeil = int256(10_000 ether) / int256(365 days); // MAX_ADJUSTMENT_SPEED
         config.curveSteepness = bound(curveSteepness, WAD, int256(100 ether));
