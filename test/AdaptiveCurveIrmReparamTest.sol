@@ -375,9 +375,9 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
     /// test as owner and manager, letting it call `setMarketCurveParams`.
     function _deployIrm() internal returns (AdaptiveCurveIrm deployed) {
         deployed = new AdaptiveCurveIrm(address(this));
-        // `isInitialized` is packed with `manager` in slot 4 (both zero-clearable here since manager is unset);
+        // `isInitialized` is packed with `manager` in slot 1 (both zero-clearable here since manager is unset);
         // clearing it lets a directly-deployed (non-proxy) IRM be initialized.
-        vm.store(address(deployed), bytes32(uint256(4)), bytes32(0));
+        vm.store(address(deployed), bytes32(uint256(1)), bytes32(0));
         deployed.initialize(address(this), address(this));
     }
 
@@ -400,9 +400,10 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         _setRateAtTarget(address(control), controlParams.id(), seededRate);
     }
 
-    /// @dev Forces the IRM's stored `rateAtTarget[id]` to `rate` via vm.store (slot 0), to start from a known state.
+    /// @dev Forces the IRM's stored `rateAtTarget[id]` to `rate` via vm.store (mapping base slot 2), to start from a
+    /// known state.
     function _setRateAtTarget(address irmAddress, Id marketId, int256 rate) internal {
-        vm.store(irmAddress, keccak256(abi.encode(Id.unwrap(marketId), uint256(0))), bytes32(uint256(rate)));
+        vm.store(irmAddress, keccak256(abi.encode(Id.unwrap(marketId), uint256(2))), bytes32(uint256(rate)));
     }
 
     function _adaptDown() internal {

@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
 import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
+import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
@@ -93,7 +94,7 @@ contract AdaptiveCurveIrmProxyTest is Test, CurveRefHelper {
         // initialized directly (only the proxy, whose storage starts zeroed, can be).
         AdaptiveCurveIrm impl = new AdaptiveCurveIrm(address(this));
         assertTrue(impl.isInitialized(), "implementation locked at construction");
-        vm.expectRevert(bytes(ErrorsLib.ALREADY_INITIALIZED));
+        vm.expectRevert(bytes(OwnerManagerErrors.ALREADY_INITIALIZED));
         impl.initialize(address(this), address(this));
 
         address proxy = _wiredProxy(address(this));
@@ -142,7 +143,7 @@ contract AdaptiveCurveIrmProxyTest is Test, CurveRefHelper {
         assertEq(AdaptiveCurveIrm(proxy).rateAtTarget(id), rateBefore, "rateAtTarget persisted");
 
         // The old owner (this) lost the owner-only power: it can no longer rotate roles.
-        vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
+        vm.expectRevert(bytes(OwnerManagerErrors.NOT_OWNER));
         AdaptiveCurveIrm(proxy).setManager(address(0xCAFE));
 
         // The new owner has it.
@@ -173,18 +174,18 @@ contract AdaptiveCurveIrmProxyTest is Test, CurveRefHelper {
         );
     }
 
-    /// The EIP-1967 impl/admin pointers live in their own slots, never touching rateAtTarget (slot 0).
+    /// The EIP-1967 impl/admin pointers live in their own slots, never touching the rateAtTarget mapping.
     function test_proxyImplAndAdminSlots_doNotCollideWithRateAtTarget() public {
         address proxy = _wiredProxy(address(this));
         int256 expectedSeed = _adaptUp(proxy);
         int256 seededRate = AdaptiveCurveIrm(proxy).rateAtTarget(id);
-        assertEq(seededRate, expectedSeed, "rateAtTarget seeded in slot 0, exactly per the reference");
+        assertEq(seededRate, expectedSeed, "rateAtTarget seeded exactly per the reference");
 
         TestERC1967Proxy(payable(proxy)).setAdmin(address(0xADA));
         TestERC1967Proxy(payable(proxy)).upgradeTo(address(new AdaptiveCurveIrm(address(this))));
 
         assertEq(TestERC1967Proxy(payable(proxy)).admin(), address(0xADA), "admin slot written");
-        assertEq(AdaptiveCurveIrm(proxy).rateAtTarget(id), seededRate, "rateAtTarget (slot 0) intact after slot writes");
+        assertEq(AdaptiveCurveIrm(proxy).rateAtTarget(id), seededRate, "rateAtTarget intact after slot writes");
     }
 
     /* HELPERS */

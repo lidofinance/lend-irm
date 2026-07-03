@@ -6,6 +6,8 @@ import {IAdaptiveCurveIrm} from "./interfaces/IAdaptiveCurveIrm.sol";
 import {IAdaptiveCurveConfig} from "./interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "./interfaces/IAdaptiveCurveTypes.sol";
 import {AdaptiveCurveConfig} from "./AdaptiveCurveConfig.sol";
+import {OwnerManagerBase} from "../common/OwnerManagerBase.sol";
+import {OwnerManagerErrors} from "../common/OwnerManagerErrors.sol";
 
 import {UtilsLib} from "./libraries/UtilsLib.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
@@ -17,9 +19,10 @@ import {MathLib as MorphoMathLib} from "../../lib/morpho-blue/src/libraries/Math
 
 /// @title AdaptiveCurveIrm
 /// @author Morpho Labs. Modified by Lido.
-/// @notice The AdaptiveCurveIRM with per-market immutable curve configs, an optional borrow-rate cap, and
-/// proxy-style initialization.
-contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
+/// @notice One instance serves many markets keyed by `Id`: each market points at an immutable AdaptiveCurveConfig
+/// (deployed and deduplicated here) and keeps its own adapting `rateAtTarget`. The curve and its adaptation are
+/// byte-identical to upstream. Access (owner/manager, init lock) is inherited from OwnerManagerBase.
+contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     using MathLib for int256;
     using UtilsLib for int256;
     using MorphoMathLib for uint128;
@@ -36,6 +39,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     address public immutable MORPHO;
 
     /* STORAGE */
+    // Appended after the OwnerManagerBase storage. The layout is append-only so it is safe behind a proxy.
 
     /// @inheritdoc IAdaptiveCurveIrm
     mapping(Id => int256) public rateAtTarget;
@@ -46,84 +50,37 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
     /// @inheritdoc IAdaptiveCurveIrm
     mapping(bytes32 => IAdaptiveCurveConfig) public deployedCurveConfigs;
 
-    /// @inheritdoc IAdaptiveCurveIrm
-    address public owner;
+    /* CONSTRUCTOR */
 
-    /// @inheritdoc IAdaptiveCurveIrm
-    address public manager;
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    bool public isInitialized;
-
-    /* CONSTRUCTOR & INITIALIZATION */
-
-    /// @dev Locks the implementation contract when it is deployed, preventing it from being initialized.
     /// @param morpho The address of Morpho.
+    /// @dev The OwnerManagerBase constructor marks the implementation itself initialized so only a proxy (whose storage
+    /// starts zeroed) can be `initialize`d.
     constructor(address morpho) {
-        require(morpho != address(0), ErrorsLib.ZERO_ADDRESS);
+        require(morpho != address(0), OwnerManagerErrors.ZERO_ADDRESS);
 
         MORPHO = morpho;
-        isInitialized = true;
-    }
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    function initialize(address newOwner, address newManager) external {
-        require(!isInitialized, ErrorsLib.ALREADY_INITIALIZED);
-
-        isInitialized = true;
-        _transferOwnership(newOwner);
-        _setManager(newManager);
-    }
-
-    /* OWNERSHIP & MANAGEMENT */
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    function transferOwnership(address newOwner) external {
-        require(msg.sender == owner, ErrorsLib.NOT_OWNER);
-        _transferOwnership(newOwner);
-    }
-
-    /// @inheritdoc IAdaptiveCurveIrm
-    function setManager(address newManager) external {
-        require(msg.sender == owner, ErrorsLib.NOT_OWNER);
-        _setManager(newManager);
-    }
-
-    function _transferOwnership(address newOwner) internal {
-        require(newOwner != address(0), ErrorsLib.ZERO_ADDRESS);
-
-        address previousOwner = owner;
-        owner = newOwner;
-        emit OwnershipTransferred(previousOwner, newOwner);
-    }
-
-    function _setManager(address newManager) internal {
-        require(newManager != address(0), ErrorsLib.ZERO_ADDRESS);
-
-        manager = newManager;
-        emit ManagerSet(newManager);
     }
 
     /* CONFIG MANAGEMENT */
 
     /// @inheritdoc IAdaptiveCurveIrm
     function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams) external {
-        require(msg.sender == owner || msg.sender == manager, ErrorsLib.NOT_AUTHORIZED);
+        _checkAuthorized();
 
         Id id = marketParams.id();
         bytes32 curveParamsHash = keccak256(abi.encode(curveParams));
 
         // Deduplicate: reuse the config already deployed for these exact params, otherwise deploy one (it validates
         // `curveParams` in its constructor) and cache it. Immutable configs are safely shareable across markets.
-        IAdaptiveCurveConfig curveConfig = deployedCurveConfigs[curveParamsHash];
-        if (address(curveConfig) == address(0)) {
-            curveConfig = new AdaptiveCurveConfig(curveParams);
-            deployedCurveConfigs[curveParamsHash] = curveConfig;
-            emit ConfigDeployed(curveParamsHash, address(curveConfig));
+        IAdaptiveCurveConfig config = deployedCurveConfigs[curveParamsHash];
+        if (address(config) == address(0)) {
+            config = new AdaptiveCurveConfig(curveParams);
+            deployedCurveConfigs[curveParamsHash] = config;
+            emit ConfigDeployed(curveParamsHash, address(config));
         }
 
-        marketCurveConfig[id] = curveConfig;
-        emit MarketCurveParamsSet(id, address(curveConfig), curveParams);
+        marketCurveConfig[id] = config;
+        emit MarketCurveParamsSet(id, address(config), curveParams);
     }
 
     /* BORROW RATES */
@@ -150,7 +107,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm {
         return avgRate;
     }
 
-    /// @dev Returns avgRate and endRateAtTarget.
+    /// @dev Returns avgRate and endRateAtTarget for market `id`.
     /// @dev Assumes that the inputs `marketParams` and `id` match.
     function _borrowRate(Id id, Market memory market) private view returns (uint256, int256) {
         IAdaptiveCurveConfig curveConfig = marketCurveConfig[id];

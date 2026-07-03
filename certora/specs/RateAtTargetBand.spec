@@ -6,7 +6,7 @@
 //
 // The curve parameters live in a per-market AdaptiveCurveConfig that the IRM reads via an external `getCurveParams()` static
 // call. The spec links an AdaptiveCurveConfig (`Cfg`) and pins it as the config registered for the market via the native
-// `config(id)` getter; the market id is derived from `marketParams` with the pure `Lib.toId` helper, which
+// `marketCurveConfig(id)` getter. The market id is derived from `marketParams` with the pure `Lib.toId` helper, which
 // computes the same `MarketParamsLib.id()` the contract computes internally. `_newRateAtTarget` is summarized to an
 // arbitrary value within [min, max] -- exactly the guarantee of its final `.bound(min, max)` -- so the rule checks
 // that the contract routes only in-band values into storage (first interaction -> initial, no adaptation ->

@@ -6,6 +6,8 @@ import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig
 import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
+import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
+import {IOwnerManager} from "../src/common/IOwnerManager.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
@@ -43,21 +45,21 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
 
     function testDeployment() public {
         // The constructor rejects a zero morpho.
-        vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
+        vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
         new AdaptiveCurveIrm(address(0));
 
         // `initialize` rejects a zero owner, sets it once, and rejects a second call.
         AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this));
-        // The constructor locks the implementation (isInitialized == true, packed with `manager` in slot 4); clear the
+        // The constructor locks the implementation (isInitialized == true, packed with `manager` in slot 1); clear the
         // slot so `initialize` runs.
-        vm.store(address(fresh), bytes32(uint256(4)), bytes32(0));
-        vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
+        vm.store(address(fresh), bytes32(uint256(1)), bytes32(0));
+        vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
         fresh.initialize(address(0), address(this));
 
         fresh.initialize(address(this), address(this));
         assertEq(fresh.owner(), address(this), "owner set by initialize");
 
-        vm.expectRevert(bytes(ErrorsLib.ALREADY_INITIALIZED));
+        vm.expectRevert(bytes(OwnerManagerErrors.ALREADY_INITIALIZED));
         fresh.initialize(address(this), address(this));
     }
 
@@ -429,7 +431,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     function testSetConfigOnlyOwner(address caller) public {
         vm.assume(caller != address(this)); // address(this) is owner and manager (set in setUp)
         vm.prank(caller);
-        vm.expectRevert(bytes(ErrorsLib.NOT_AUTHORIZED));
+        vm.expectRevert(bytes(OwnerManagerErrors.NOT_AUTHORIZED));
         AdaptiveCurveIrm(address(irm)).setMarketCurveParams(marketParams, _defaultConfig());
     }
 
@@ -444,7 +446,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         assertEq(irm_.owner(), newOwner, "owner changed");
 
         // The old owner (this) can no longer exercise owner-only powers; the new owner can.
-        vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
+        vm.expectRevert(bytes(OwnerManagerErrors.NOT_OWNER));
         irm_.setManager(address(this));
         vm.prank(newOwner);
         irm_.setManager(address(this));
@@ -455,33 +457,33 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     function testTransferOwnershipOnlyOwner(address caller) public {
         vm.assume(caller != address(this));
         vm.prank(caller);
-        vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
+        vm.expectRevert(bytes(OwnerManagerErrors.NOT_OWNER));
         AdaptiveCurveIrm(address(irm)).transferOwnership(caller);
     }
 
     /// transferOwnership rejects the zero address.
     function testTransferOwnershipRejectsZero() public {
-        vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
+        vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
         AdaptiveCurveIrm(address(irm)).transferOwnership(address(0));
     }
 
     /// setManager rejects the zero address: the manager cannot be unset.
     function testSetManagerRejectsZero() public {
-        vm.expectRevert(bytes(ErrorsLib.ZERO_ADDRESS));
+        vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
         AdaptiveCurveIrm(address(irm)).setManager(address(0));
     }
 
     /// initialize emits both role events: ownership from the zero address and the manager binding.
     function testInitializeEmitsRoleEvents() public {
         AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this));
-        vm.store(address(fresh), bytes32(uint256(4)), bytes32(0)); // unlock (see _newIrm)
+        vm.store(address(fresh), bytes32(uint256(1)), bytes32(0)); // unlock (see _newIrm)
         address owner_ = makeAddr("owner");
         address manager_ = makeAddr("manager");
 
         vm.expectEmit(true, true, true, true, address(fresh));
-        emit IAdaptiveCurveIrm.OwnershipTransferred(address(0), owner_);
+        emit IOwnerManager.OwnershipTransferred(address(0), owner_);
         vm.expectEmit(true, true, true, true, address(fresh));
-        emit IAdaptiveCurveIrm.ManagerSet(manager_);
+        emit IOwnerManager.ManagerSet(manager_);
         fresh.initialize(owner_, manager_);
     }
 
@@ -492,18 +494,18 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         address newManager = makeAddr("newManager");
 
         vm.expectEmit(true, true, true, true, address(irm_));
-        emit IAdaptiveCurveIrm.ManagerSet(newManager);
+        emit IOwnerManager.ManagerSet(newManager);
         irm_.setManager(newManager);
 
         vm.expectEmit(true, true, true, true, address(irm_));
-        emit IAdaptiveCurveIrm.OwnershipTransferred(address(this), newOwner);
+        emit IOwnerManager.OwnershipTransferred(address(this), newOwner);
         irm_.transferOwnership(newOwner);
     }
 
     /// A manager distinct from the owner can set market curve params but cannot rotate either role.
     function testManagerRoleSeparation() public {
         AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this));
-        vm.store(address(fresh), bytes32(uint256(4)), bytes32(0)); // unlock (see _newIrm)
+        vm.store(address(fresh), bytes32(uint256(1)), bytes32(0)); // unlock (see _newIrm)
         address manager_ = makeAddr("manager");
         fresh.initialize(address(this), manager_);
 
@@ -515,11 +517,11 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         assertTrue(address(fresh.marketCurveConfig(params.id())) != address(0), "manager set the market's config");
 
         vm.prank(manager_);
-        vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
+        vm.expectRevert(bytes(OwnerManagerErrors.NOT_OWNER));
         fresh.setManager(manager_);
 
         vm.prank(manager_);
-        vm.expectRevert(bytes(ErrorsLib.NOT_OWNER));
+        vm.expectRevert(bytes(OwnerManagerErrors.NOT_OWNER));
         fresh.transferOwnership(manager_);
     }
 
@@ -870,10 +872,10 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     /// @dev Deploys an IRM with the test as morpho, owner, and manager.
     function _newIrm() internal returns (AdaptiveCurveIrm irm_) {
         irm_ = new AdaptiveCurveIrm(address(this));
-        // The constructor locks the implementation (isInitialized == true, packed with `manager` in slot 4); clear the
+        // The constructor locks the implementation (isInitialized == true, packed with `manager` in slot 1); clear the
         // slot so a direct-deployed IRM can be initialized in tests. `manager` is still zero here, so wiping the whole
         // slot only unsets the lock.
-        vm.store(address(irm_), bytes32(uint256(4)), bytes32(0));
+        vm.store(address(irm_), bytes32(uint256(1)), bytes32(0));
         irm_.initialize(address(this), address(this));
     }
 

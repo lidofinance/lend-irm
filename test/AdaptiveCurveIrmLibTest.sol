@@ -25,9 +25,9 @@ contract AdaptiveCurveIrmLibTest is Test {
     /// @dev A bare IRM with the test as morpho and owner (so it can set configs).
     function _deploy() internal returns (address) {
         AdaptiveCurveIrm irm_ = new AdaptiveCurveIrm(address(this));
-        // The constructor locks the implementation (isInitialized=true); it packs into slot 4 alongside `manager`.
+        // The constructor locks the implementation (isInitialized=true); it packs into slot 1 alongside `manager`.
         // Clear the slot so this direct-deploy (not behind a proxy) can be initialized with the test as owner+manager.
-        vm.store(address(irm_), bytes32(uint256(4)), bytes32(0));
+        vm.store(address(irm_), bytes32(uint256(1)), bytes32(0));
         irm_.initialize(address(this), address(this));
         return address(irm_);
     }
@@ -225,9 +225,9 @@ contract AdaptiveCurveIrmLibTest is Test {
         config.maxBorrowRate = capEnabled ? bound(maxBorrowRate, 1, 10_000 ether / uint256(365 days)) : 0;
     }
 
-    /// @dev Forces the IRM's stored `rateAtTarget[id]` to `rate` via vm.store, so equivalence checks start from a known
-    /// state.
+    /// @dev Forces the IRM's stored `rateAtTarget[id]` (mapping base slot 2) to `rate` via vm.store, so equivalence
+    /// checks start from a known state.
     function _setRateAtTarget(address irmAddress, bytes32 marketId, uint256 rate) internal {
-        vm.store(irmAddress, keccak256(abi.encode(marketId, uint256(0))), bytes32(rate));
+        vm.store(irmAddress, keccak256(abi.encode(marketId, uint256(2))), bytes32(rate));
     }
 }
