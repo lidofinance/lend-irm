@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig.sol";
 import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
+import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
 import {ErrorsLib} from "../src/adaptive-curve-irm/libraries/ErrorsLib.sol";
 import {WAD_INT as WAD} from "../src/adaptive-curve-irm/libraries/MathLib.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
@@ -18,9 +19,9 @@ contract AdaptiveCurveConfigTest is Test {
 
     /// getCurveParams() round-trips every field frozen into the immutables.
     function testGetConfigRoundTrips() public {
-        IAdaptiveCurveConfig.Params memory config = _defaultConfig();
+        AdaptiveCurveParams memory config = _defaultConfig();
         config.maxBorrowRate = 0.5 ether / uint256(365 days);
-        IAdaptiveCurveConfig.Params memory roundTripped = new AdaptiveCurveConfig(config).getCurveParams();
+        AdaptiveCurveParams memory roundTripped = new AdaptiveCurveConfig(config).getCurveParams();
 
         assertEq(roundTripped.curveSteepness, config.curveSteepness, "curveSteepness");
         assertEq(roundTripped.adjustmentSpeed, config.adjustmentSpeed, "adjustmentSpeed");
@@ -33,7 +34,7 @@ contract AdaptiveCurveConfigTest is Test {
 
     /// The constructor rejects each parameter just outside both ends of its valid range.
     function testDeploymentRevertsOnInvalidParams() public {
-        IAdaptiveCurveConfig.Params memory config;
+        AdaptiveCurveParams memory config;
 
         config = _defaultConfig();
         config.curveSteepness = WAD - 1; // < 1e18
@@ -82,8 +83,8 @@ contract AdaptiveCurveConfigTest is Test {
 
     /* HELPERS */
 
-    function _defaultConfig() internal pure returns (IAdaptiveCurveConfig.Params memory) {
-        return IAdaptiveCurveConfig.Params({
+    function _defaultConfig() internal pure returns (AdaptiveCurveParams memory) {
+        return AdaptiveCurveParams({
             curveSteepness: ConstantsLib.CURVE_STEEPNESS,
             adjustmentSpeed: ConstantsLib.ADJUSTMENT_SPEED,
             targetUtilization: ConstantsLib.TARGET_UTILIZATION,
@@ -94,7 +95,7 @@ contract AdaptiveCurveConfigTest is Test {
         });
     }
 
-    function _expectRevert(IAdaptiveCurveConfig.Params memory config, string memory expectedError) internal {
+    function _expectRevert(AdaptiveCurveParams memory config, string memory expectedError) internal {
         vm.expectRevert(bytes(expectedError));
         new AdaptiveCurveConfig(config);
     }

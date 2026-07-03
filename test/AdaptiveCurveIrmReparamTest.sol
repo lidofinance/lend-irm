@@ -2,8 +2,8 @@
 pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
-import {AdaptiveCurveConfigFactory} from "../src/adaptive-curve-irm/AdaptiveCurveConfigFactory.sol";
 import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
+import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
 import "../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
@@ -21,7 +21,6 @@ contract AdaptiveCurveIrmReparamTest is Test {
     uint256 internal constant TARGET = 0.9 ether;
 
     AdaptiveCurveIrm internal irm;
-    AdaptiveCurveConfigFactory internal factory;
     MarketParams internal params;
     Id internal id;
 
@@ -80,7 +79,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
         int256 maxRate = int256(0.08 ether) / Y;
 
         // Uncapped tip at 100% util (first interaction) = initial * curveSteepness = 0.06/yr.
-        IAdaptiveCurveConfig.Params memory config = _config(initialRate, minRate, maxRate);
+        AdaptiveCurveParams memory config = _config(initialRate, minRate, maxRate);
         config.maxBorrowRate = 0.05 ether / uint256(Y); // below the 0.06/yr tip
         _wired(config);
 
@@ -91,7 +90,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
         );
 
         // Reparametrize to a tighter cap (same curve); the new ceiling takes effect on the next call.
-        IAdaptiveCurveConfig.Params memory tighterCapConfig = _config(initialRate, minRate, maxRate);
+        AdaptiveCurveParams memory tighterCapConfig = _config(initialRate, minRate, maxRate);
         tighterCapConfig.maxBorrowRate = 0.03 ether / uint256(Y);
         _reparam(tighterCapConfig);
 
@@ -111,7 +110,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
         uint256 chargedBefore = irm.borrowRateView(params, _market(TARGET));
 
         int256 capRate = rateBefore / 2;
-        IAdaptiveCurveConfig.Params memory cappedConfig = _config(rateBefore, rateBefore / 2, rateBefore * 2);
+        AdaptiveCurveParams memory cappedConfig = _config(rateBefore, rateBefore / 2, rateBefore * 2);
         cappedConfig.maxBorrowRate = uint256(capRate);
         _reparam(cappedConfig);
 
@@ -187,7 +186,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
         int256 storedRate = _rateAtTarget();
         uint256 chargedBefore = irm.borrowRateView(params, _market(0.8 ether));
 
-        IAdaptiveCurveConfig.Params memory newConfig = _config(storedRate, storedRate / 2, storedRate * 2);
+        AdaptiveCurveParams memory newConfig = _config(storedRate, storedRate / 2, storedRate * 2);
         newConfig.targetUtilization = int256(0.5 ether);
         _reparam(newConfig);
 
@@ -204,7 +203,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
         int256 storedRate = _rateAtTarget();
         uint256 chargedBefore = irm.borrowRateView(params, _market(0.98 ether));
 
-        IAdaptiveCurveConfig.Params memory newConfig = _config(storedRate, storedRate / 2, storedRate * 2);
+        AdaptiveCurveParams memory newConfig = _config(storedRate, storedRate / 2, storedRate * 2);
         newConfig.curveSteepness = int256(4 ether);
         _reparam(newConfig);
 
@@ -225,7 +224,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
 
         // Reparametrize mid-span to a faster adjustmentSpeed; the curve is otherwise the same and the bounds keep
         // startRate.
-        IAdaptiveCurveConfig.Params memory fasterConfig = _config(startRate, startRate / 4, startRate * 4);
+        AdaptiveCurveParams memory fasterConfig = _config(startRate, startRate / 4, startRate * 4);
         fasterConfig.adjustmentSpeed = int256(80 ether) / Y; // 4x the original 20/yr
         _reparam(fasterConfig);
 
@@ -249,7 +248,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
         int256 rateBefore = _rateAtTarget();
 
         // Reparametrize to a 4x faster adjustmentSpeed; bounds wide, curve otherwise identical.
-        IAdaptiveCurveConfig.Params memory fasterConfig = _config(rateBefore, rateBefore / 4, rateBefore * 4);
+        AdaptiveCurveParams memory fasterConfig = _config(rateBefore, rateBefore / 4, rateBefore * 4);
         fasterConfig.adjustmentSpeed = int256(80 ether) / Y;
         _reparam(fasterConfig);
         assertEq(
@@ -261,7 +260,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
         int256 fastRate = _rateAtTarget();
 
         // Control: same start and same 5-day step under the ORIGINAL (slow) speed.
-        IAdaptiveCurveConfig.Params memory slowerConfig = _config(rateBefore, rateBefore / 4, rateBefore * 4);
+        AdaptiveCurveParams memory slowerConfig = _config(rateBefore, rateBefore / 4, rateBefore * 4);
         slowerConfig.adjustmentSpeed = int256(20 ether) / Y;
         (AdaptiveCurveIrm control, MarketParams memory controlParams) = _seededControl(slowerConfig, rateBefore);
         Market memory controlMarket = _market(0.3 ether);
@@ -290,7 +289,7 @@ contract AdaptiveCurveIrmReparamTest is Test {
 
         // Reparametrize to a different curve (steeper, lower target, with a cap); periphery must follow.
         int256 storedRate = _rateAtTarget();
-        IAdaptiveCurveConfig.Params memory newConfig = _config(storedRate, storedRate / 4, storedRate * 4);
+        AdaptiveCurveParams memory newConfig = _config(storedRate, storedRate / 4, storedRate * 4);
         newConfig.curveSteepness = int256(3 ether);
         newConfig.targetUtilization = int256(0.5 ether);
         newConfig.maxBorrowRate = uint256(storedRate * 2);
@@ -311,9 +310,9 @@ contract AdaptiveCurveIrmReparamTest is Test {
     function _config(int256 initialRate, int256 minRate, int256 maxRate)
         internal
         pure
-        returns (IAdaptiveCurveConfig.Params memory)
+        returns (AdaptiveCurveParams memory)
     {
-        return IAdaptiveCurveConfig.Params({
+        return AdaptiveCurveParams({
             curveSteepness: int256(1.5 ether),
             adjustmentSpeed: int256(20 ether) / Y,
             targetUtilization: int256(TARGET),
@@ -324,15 +323,13 @@ contract AdaptiveCurveIrmReparamTest is Test {
         });
     }
 
-    function _defaultConfig() internal pure returns (IAdaptiveCurveConfig.Params memory) {
+    function _defaultConfig() internal pure returns (AdaptiveCurveParams memory) {
         return _config(int256(0.04 ether) / Y, int256(0.005 ether) / Y, int256(0.2 ether) / Y);
     }
 
-    /// @dev Deploys the factory + IRM (test as morpho + owner), wires the market (`params`/`id`), and sets `config`.
-    function _wired(IAdaptiveCurveConfig.Params memory config) internal {
-        factory = new AdaptiveCurveConfigFactory();
-        irm = new AdaptiveCurveIrm(address(this));
-        irm.initialize(address(this));
+    /// @dev Deploys the IRM (test as morpho + owner), wires the market (`params`/`id`), and sets `config`.
+    function _wired(AdaptiveCurveParams memory config) internal {
+        irm = _deployIrm();
         params = MarketParams({
             loanToken: address(0xA11CE),
             collateralToken: address(0xB0B),
@@ -341,30 +338,41 @@ contract AdaptiveCurveIrmReparamTest is Test {
             lltv: 0.8 ether
         });
         id = params.id();
-        _register(address(irm), id, config);
+        _register(address(irm), params, config);
     }
 
     /// @dev Reparametrizes the live market by pointing it at a fresh AdaptiveCurveConfig under the same id (replaces
     /// it).
-    function _reparam(IAdaptiveCurveConfig.Params memory config) internal {
-        _register(address(irm), id, config);
+    function _reparam(AdaptiveCurveParams memory config) internal {
+        _register(address(irm), params, config);
     }
 
-    function _register(address irmAddress, Id marketId, IAdaptiveCurveConfig.Params memory config) internal {
-        AdaptiveCurveIrm(irmAddress).setConfig(marketId, factory.createConfig(config));
+    /// @dev Deploys the IRM directly (no proxy) and clears the implementation lock so it can be initialized with the
+    /// test as owner and manager, letting it call `setMarketCurveParams`.
+    function _deployIrm() internal returns (AdaptiveCurveIrm deployed) {
+        deployed = new AdaptiveCurveIrm(address(this));
+        // `isInitialized` is packed with `manager` in slot 4 (both zero-clearable here since manager is unset);
+        // clearing it lets a directly-deployed (non-proxy) IRM be initialized.
+        vm.store(address(deployed), bytes32(uint256(4)), bytes32(0));
+        deployed.initialize(address(this), address(this));
+    }
+
+    function _register(address irmAddress, MarketParams memory marketParams, AdaptiveCurveParams memory config)
+        internal
+    {
+        AdaptiveCurveIrm(irmAddress).setMarketCurveParams(marketParams, config);
     }
 
     /// @dev A standalone IRM for `config` seeded to `seededRate` on the wired market — the "same curve, applied from
     /// scratch" reference.
-    function _seededControl(IAdaptiveCurveConfig.Params memory config, int256 seededRate)
+    function _seededControl(AdaptiveCurveParams memory config, int256 seededRate)
         internal
         returns (AdaptiveCurveIrm control, MarketParams memory controlParams)
     {
-        control = new AdaptiveCurveIrm(address(this));
-        control.initialize(address(this));
+        control = _deployIrm();
         controlParams = params;
         controlParams.irm = address(control);
-        _register(address(control), controlParams.id(), config);
+        _register(address(control), controlParams, config);
         _setRateAtTarget(address(control), controlParams.id(), seededRate);
     }
 

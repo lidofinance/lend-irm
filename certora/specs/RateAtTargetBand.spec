@@ -21,14 +21,14 @@ using AdaptiveCurveConfig as Cfg;
 using AdaptiveCurveIrmLibHarness as Lib;
 
 methods {
-    function Irm.config(AdaptiveCurveIrm.Id) external returns (address) envfree;
+    function Irm.marketCurveConfig(AdaptiveCurveIrm.Id) external returns (address) envfree;
     function Irm.rateAtTarget(AdaptiveCurveIrm.Id) external returns (int256) envfree;
     function Lib.toId(AdaptiveCurveIrm.MarketParams) external returns (AdaptiveCurveIrm.Id) envfree;
-    function Cfg.getCurveParams() external returns (IAdaptiveCurveConfig.Params) envfree;
+    function Cfg.getCurveParams() external returns (AdaptiveCurveIrm.AdaptiveCurveParams) envfree;
 
     function _.getCurveParams() external => DISPATCHER(true);
 
-    function AdaptiveCurveIrm._newRateAtTarget(int256, int256, IAdaptiveCurveConfig.Params memory) internal returns (int256)
+    function AdaptiveCurveIrm._newRateAtTarget(int256, int256, AdaptiveCurveIrm.AdaptiveCurveParams memory) internal returns (int256)
         => inBand();
     function AdaptiveCurveIrm._curve(int256, int256, int256) internal returns (int256) => NONDET;
 }
@@ -37,7 +37,7 @@ definition WAD() returns int256 = 1000000000000000000;
 
 // Models `.bound(min, max)`: an arbitrary value within the band of the linked config.
 function inBand() returns int256 {
-    IAdaptiveCurveConfig.Params cfg = Cfg.getCurveParams();
+    AdaptiveCurveIrm.AdaptiveCurveParams cfg = Cfg.getCurveParams();
     int256 r;
     require r >= cfg.minRateAtTarget && r <= cfg.maxRateAtTarget;
     return r;
@@ -45,7 +45,7 @@ function inBand() returns int256 {
 
 // What AdaptiveCurveConfig's _validateConfig guarantees about the linked config's params.
 function validConfig() {
-    IAdaptiveCurveConfig.Params cfg = Cfg.getCurveParams();
+    AdaptiveCurveIrm.AdaptiveCurveParams cfg = Cfg.getCurveParams();
     require cfg.minRateAtTarget > 0;
     require cfg.maxRateAtTarget >= cfg.minRateAtTarget;
     require cfg.initialRateAtTarget >= cfg.minRateAtTarget && cfg.initialRateAtTarget <= cfg.maxRateAtTarget;
@@ -57,9 +57,9 @@ function validConfig() {
 
 rule rateAtTargetStaysInBand(env e, AdaptiveCurveIrm.MarketParams marketParams, AdaptiveCurveIrm.Market market) {
     AdaptiveCurveIrm.Id id = Lib.toId(marketParams);
-    require Irm.config(id) == Cfg;              // the registered config is the linked AdaptiveCurveConfig
+    require Irm.marketCurveConfig(id) == Cfg;              // the registered config is the linked AdaptiveCurveConfig
     validConfig();
-    IAdaptiveCurveConfig.Params cfg = Cfg.getCurveParams();
+    AdaptiveCurveIrm.AdaptiveCurveParams cfg = Cfg.getCurveParams();
 
     int256 before = Irm.rateAtTarget(id);
     // Inductive hypothesis: previously in band, or the 0 first-interaction sentinel.

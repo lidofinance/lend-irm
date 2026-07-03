@@ -2,6 +2,7 @@
 pragma solidity 0.8.35;
 
 import {IAdaptiveCurveConfig} from "./interfaces/IAdaptiveCurveConfig.sol";
+import {AdaptiveCurveParams} from "./interfaces/IAdaptiveCurveTypes.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
 import {WAD_INT as WAD} from "./libraries/MathLib.sol";
 
@@ -34,7 +35,7 @@ contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
     /* CONSTRUCTOR */
 
     /// @notice Validates `cfg` and freezes it into immutables.
-    constructor(Params memory cfg) {
+    constructor(AdaptiveCurveParams memory cfg) {
         _validateConfig(cfg);
 
         CURVE_STEEPNESS = cfg.curveSteepness;
@@ -49,7 +50,7 @@ contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
     /// @dev Reverts unless `cfg` is a valid curve configuration, with a per-parameter error message. The bounds
     /// (upper limits included) keep the curve math inside its non-overflowing range, so `borrowRate` returns a
     /// non-negative rate without reverting. They enforce well-formedness only, not economic soundness.
-    function _validateConfig(Params memory cfg) private pure {
+    function _validateConfig(AdaptiveCurveParams memory cfg) private pure {
         require(cfg.curveSteepness >= WAD, ErrorsLib.INVALID_CURVE_STEEPNESS);
         require(cfg.curveSteepness <= MAX_CURVE_STEEPNESS, ErrorsLib.INVALID_CURVE_STEEPNESS);
 
@@ -68,8 +69,8 @@ contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
     }
 
     /// @inheritdoc IAdaptiveCurveConfig
-    function getCurveParams() external view returns (Params memory) {
-        return Params({
+    function getCurveParams() external view returns (AdaptiveCurveParams memory) {
+        return AdaptiveCurveParams({
             curveSteepness: CURVE_STEEPNESS,
             adjustmentSpeed: ADJUSTMENT_SPEED,
             targetUtilization: TARGET_UTILIZATION,

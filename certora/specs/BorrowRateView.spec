@@ -16,8 +16,8 @@ ghost int256 g_minRateAtTarget;
 ghost int256 g_maxRateAtTarget;
 ghost uint256 g_maxBorrowRate;
 
-function getCurveParamsSummary() returns IAdaptiveCurveConfig.Params {
-    IAdaptiveCurveConfig.Params c;
+function getCurveParamsSummary() returns AdaptiveCurveIrm.AdaptiveCurveParams {
+    AdaptiveCurveIrm.AdaptiveCurveParams c;
     require c.curveSteepness == g_curveSteepness;
     require c.adjustmentSpeed == g_adjustmentSpeed;
     require c.targetUtilization == g_targetUtilization;
@@ -32,8 +32,8 @@ methods {
     function AdaptiveCurveIrmLibHarness.toId(AdaptiveCurveIrm.MarketParams) external returns (AdaptiveCurveIrm.Id) envfree;
 
     function _.rateAtTarget(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
-    function _.config(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
-    function _.getCurveParams() external => getCurveParamsSummary() expect IAdaptiveCurveConfig.Params;
+    function _.marketCurveConfig(AdaptiveCurveIrm.Id id) external => DISPATCHER(true);
+    function _.getCurveParams() external => getCurveParamsSummary() expect AdaptiveCurveIrm.AdaptiveCurveParams;
 }
 
 // Rule: the lib returns the same result as the contract

@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import {Id, Market, IMorpho} from "../../../../lib/lido-lend/src/interfaces/IMorpho.sol";
 import {IAdaptiveCurveIrm} from "../../interfaces/IAdaptiveCurveIrm.sol";
 import {IAdaptiveCurveConfig} from "../../interfaces/IAdaptiveCurveConfig.sol";
+import {AdaptiveCurveParams} from "../../interfaces/IAdaptiveCurveTypes.sol";
 
 import {ExpLib} from "../ExpLib.sol";
 import {UtilsLib} from "../UtilsLib.sol";
@@ -76,9 +77,9 @@ library AdaptiveCurveIrmLib {
     {
         // Curve parameters live in the per-market AdaptiveCurveConfig. Resolve it from the IRM and read it through an
         // external static call, mirroring the IRM. A market with no config set cannot be priced.
-        IAdaptiveCurveConfig config = IAdaptiveCurveIrm(adaptiveCurveIrm).config(id);
+        IAdaptiveCurveConfig config = IAdaptiveCurveIrm(adaptiveCurveIrm).marketCurveConfig(id);
         require(address(config) != address(0), ErrorsLib.CONFIG_NOT_SET);
-        IAdaptiveCurveConfig.Params memory p = config.getCurveParams();
+        AdaptiveCurveParams memory p = config.getCurveParams();
 
         int256 err = _err(market, p.targetUtilization);
 
@@ -155,7 +156,7 @@ library AdaptiveCurveIrmLib {
 
     /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
     /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, IAdaptiveCurveConfig.Params memory p)
+    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, AdaptiveCurveParams memory p)
         internal
         pure
         returns (int256)

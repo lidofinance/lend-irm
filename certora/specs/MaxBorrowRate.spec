@@ -15,22 +15,22 @@ using AdaptiveCurveConfig as Cfg;
 using AdaptiveCurveIrmLibHarness as Lib;
 
 methods {
-    function Irm.config(AdaptiveCurveIrm.Id) external returns (address) envfree;
+    function Irm.marketCurveConfig(AdaptiveCurveIrm.Id) external returns (address) envfree;
     function Lib.toId(AdaptiveCurveIrm.MarketParams) external returns (AdaptiveCurveIrm.Id) envfree;
-    function Cfg.getCurveParams() external returns (IAdaptiveCurveConfig.Params) envfree;
+    function Cfg.getCurveParams() external returns (AdaptiveCurveIrm.AdaptiveCurveParams) envfree;
 
     function _.getCurveParams() external => DISPATCHER(true);
 
     function AdaptiveCurveIrm._curve(int256, int256, int256) internal returns (int256) => NONDET;
-    function AdaptiveCurveIrm._newRateAtTarget(int256, int256, IAdaptiveCurveConfig.Params memory) internal returns (int256)
+    function AdaptiveCurveIrm._newRateAtTarget(int256, int256, AdaptiveCurveIrm.AdaptiveCurveParams memory) internal returns (int256)
         => NONDET;
 }
 
 // `borrowRateView` never returns more than the cap, when the cap is enabled.
 rule borrowRateViewRespectsCap(env e, AdaptiveCurveIrm.MarketParams marketParams, AdaptiveCurveIrm.Market market) {
     AdaptiveCurveIrm.Id id = Lib.toId(marketParams);
-    require Irm.config(id) == Cfg;              // the registered config is the linked AdaptiveCurveConfig
-    IAdaptiveCurveConfig.Params cfg = Cfg.getCurveParams();
+    require Irm.marketCurveConfig(id) == Cfg;              // the registered config is the linked AdaptiveCurveConfig
+    AdaptiveCurveIrm.AdaptiveCurveParams cfg = Cfg.getCurveParams();
     require cfg.maxBorrowRate != 0;                   // cap enabled
     require market.totalBorrowAssets <= market.totalSupplyAssets; // utilization <= 1, so `err` does not overflow
 
@@ -41,8 +41,8 @@ rule borrowRateViewRespectsCap(env e, AdaptiveCurveIrm.MarketParams marketParams
 // The state-changing `borrowRate` (Morpho only) likewise never returns more than the cap.
 rule borrowRateRespectsCap(env e, AdaptiveCurveIrm.MarketParams marketParams, AdaptiveCurveIrm.Market market) {
     AdaptiveCurveIrm.Id id = Lib.toId(marketParams);
-    require Irm.config(id) == Cfg;
-    IAdaptiveCurveConfig.Params cfg = Cfg.getCurveParams();
+    require Irm.marketCurveConfig(id) == Cfg;
+    AdaptiveCurveIrm.AdaptiveCurveParams cfg = Cfg.getCurveParams();
     require cfg.maxBorrowRate != 0;
     require market.totalBorrowAssets <= market.totalSupplyAssets;
 
