@@ -19,27 +19,32 @@ import {MathLib as MorphoMathLib} from "../../lib/morpho-blue/src/libraries/Math
 
 /// @title AdaptiveCurveIrm
 /// @author Morpho Labs. Modified by Lido.
-/// @notice One instance serves many markets keyed by `Id`: each market points at an immutable AdaptiveCurveConfig
-/// (deployed and deduplicated here) and keeps its own adapting `rateAtTarget`. The curve and its adaptation are
-/// byte-identical to upstream. Access (owner/manager, init lock) is inherited from OwnerManagerBase.
+/// @notice One immutable instance serves many markets keyed by `Id`: each market points at an immutable
+/// AdaptiveCurveConfig (deployed and deduplicated here) and keeps its own adapting `rateAtTarget`. The curve and its
+/// adaptation are byte-identical to upstream. Meant to sit behind IrmRouter.
 contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     using MathLib for int256;
     using UtilsLib for int256;
     using MorphoMathLib for uint128;
     using MarketParamsLib for MarketParams;
 
-    /* EVENTS */
+    // ---
+    // EVENTS
+    // ---
 
     /// @notice Emitted when a borrow rate is updated.
     event BorrowRateUpdate(Id indexed id, uint256 avgBorrowRate, uint256 rateAtTarget);
 
-    /* IMMUTABLES */
+    // ---
+    // IMMUTABLES
+    // ---
 
     /// @inheritdoc IAdaptiveCurveIrm
-    address public immutable MORPHO;
+    address public immutable ROUTER;
 
-    /* STORAGE */
-    // Appended after the OwnerManagerBase storage. The layout is append-only so it is safe behind a proxy.
+    // ---
+    // STORAGE
+    // ---
 
     /// @inheritdoc IAdaptiveCurveIrm
     mapping(Id => int256) public rateAtTarget;
@@ -50,18 +55,22 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     /// @inheritdoc IAdaptiveCurveIrm
     mapping(bytes32 => IAdaptiveCurveConfig) public deployedCurveConfigs;
 
-    /* CONSTRUCTOR */
+    // ---
+    // CONSTRUCTOR
+    // ---
 
-    /// @param morpho The address of Morpho.
-    /// @dev The OwnerManagerBase constructor marks the implementation itself initialized so only a proxy (whose storage
-    /// starts zeroed) can be `initialize`d.
-    constructor(address morpho) {
-        require(morpho != address(0), OwnerManagerErrors.ZERO_ADDRESS);
+    /// @param router The IrmRouter in front of this contract, the only caller `borrowRate` accepts.
+    constructor(address router, address owner_, address manager_) {
+        require(router != address(0), OwnerManagerErrors.ZERO_ADDRESS);
 
-        MORPHO = morpho;
+        ROUTER = router;
+        _transferOwnership(owner_);
+        _setManager(manager_);
     }
 
-    /* CONFIG MANAGEMENT */
+    // ---
+    // CONFIG MANAGEMENT
+    // ---
 
     /// @inheritdoc IAdaptiveCurveIrm
     function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams) external {
@@ -83,7 +92,9 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
         emit MarketCurveParamsSet(id, address(config), curveParams);
     }
 
-    /* BORROW RATES */
+    // ---
+    // BORROW RATES
+    // ---
 
     /// @inheritdoc IIrm
     function borrowRateView(MarketParams memory marketParams, Market memory market) external view returns (uint256) {
@@ -93,7 +104,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
 
     /// @inheritdoc IIrm
     function borrowRate(MarketParams memory marketParams, Market memory market) external returns (uint256) {
-        require(msg.sender == MORPHO, ErrorsLib.NOT_MORPHO);
+        require(msg.sender == ROUTER, ErrorsLib.NOT_ROUTER);
 
         Id id = marketParams.id();
 

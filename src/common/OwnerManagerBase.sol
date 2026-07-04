@@ -6,13 +6,14 @@ import {OwnerManagerErrors} from "./OwnerManagerErrors.sol";
 
 /// @title OwnerManagerBase
 /// @author Lido.
-/// @notice Two-role access base shared by the IRMs: an `owner` that rotates itself and the `manager`, a `manager`
-/// scoped to the param setters, and a one-shot `isInitialized` lock. The constructor marks the implementation itself
-/// initialized so only a freshly-deployed proxy (whose storage starts zeroed) can be `initialize`d.
-/// @dev Derived contracts call `_initializeRoles` from their own `initialize` (which also sets the model params), gate
-/// owner-only actions with `_checkOwner`, and owner-or-manager actions with `_checkAuthorized`.
+/// @notice Two-role access base: the `owner` rotates itself and the `manager`, the `manager` shares only the
+/// operational setters.
+/// @dev Derived contracts set the initial roles via `_transferOwnership`/`_setManager` and gate functions with
+/// `_checkOwner` or `_checkAuthorized`.
 abstract contract OwnerManagerBase is IOwnerManager {
-    /* STORAGE */
+    // ---
+    // STORAGE
+    // ---
 
     /// @inheritdoc IOwnerManager
     address public override owner;
@@ -20,17 +21,9 @@ abstract contract OwnerManagerBase is IOwnerManager {
     /// @inheritdoc IOwnerManager
     address public override manager;
 
-    /// @inheritdoc IOwnerManager
-    bool public override isInitialized;
-
-    /* CONSTRUCTOR */
-
-    /// @dev Locks the implementation: only a proxy (whose storage starts zeroed) can be `initialize`d.
-    constructor() {
-        isInitialized = true;
-    }
-
-    /* OWNERSHIP & MANAGEMENT */
+    // ---
+    // OWNERSHIP & MANAGEMENT
+    // ---
 
     /// @inheritdoc IOwnerManager
     function transferOwnership(address newOwner) external override {
@@ -44,15 +37,6 @@ abstract contract OwnerManagerBase is IOwnerManager {
         _setManager(newManager);
     }
 
-    /// @inheritdoc IOwnerManager
-    function initialize(address owner_, address manager_) external override {
-        require(!isInitialized, OwnerManagerErrors.ALREADY_INITIALIZED);
-
-        isInitialized = true;
-        _transferOwnership(owner_);
-        _setManager(manager_);
-    }
-
     /// @dev Reverts unless the caller is the owner.
     function _checkOwner() internal view {
         require(msg.sender == owner, OwnerManagerErrors.NOT_OWNER);
@@ -63,7 +47,7 @@ abstract contract OwnerManagerBase is IOwnerManager {
         require(msg.sender == owner || msg.sender == manager, OwnerManagerErrors.NOT_AUTHORIZED);
     }
 
-    /// @dev Sets `owner` to `newOwner`, reverting on the zero address, and emits `OwnershipTransferred`.
+    /// @dev Sets `owner`, reverting on the zero address.
     function _transferOwnership(address newOwner) internal {
         require(newOwner != address(0), OwnerManagerErrors.ZERO_ADDRESS);
 
@@ -72,7 +56,7 @@ abstract contract OwnerManagerBase is IOwnerManager {
         emit OwnershipTransferred(previousOwner, newOwner);
     }
 
-    /// @dev Sets `manager` to `newManager`, reverting on the zero address, and emits `ManagerSet`.
+    /// @dev Sets `manager`, reverting on the zero address.
     function _setManager(address newManager) internal {
         require(newManager != address(0), OwnerManagerErrors.ZERO_ADDRESS);
 

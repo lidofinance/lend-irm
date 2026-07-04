@@ -15,11 +15,6 @@ contract LinearKinkIrmTest is Test {
 
     uint256 internal constant WAD = 1e18;
 
-    // Slot 1 packs `manager` (offset 0) and `isInitialized` (offset 20): OwnerManagerBase lays out owner(0) then this,
-    // and LinearKinkIrm appends marketKinkParams(2). The constructor sets isInitialized=true on the implementation;
-    // clearing the slot unlocks a directly-deployed instance for `initialize` in tests.
-    bytes32 internal constant PACKED_MANAGER_SLOT = bytes32(uint256(1));
-
     address internal owner = address(0xA11CE);
     address internal manager = address(0xB0B);
     address internal outsider = address(0xDEAD);
@@ -43,9 +38,7 @@ contract LinearKinkIrmTest is Test {
     /* HELPERS */
 
     function _deployIrm(address owner_, address manager_) internal returns (LinearKinkIrm irm_) {
-        irm_ = new LinearKinkIrm();
-        vm.store(address(irm_), PACKED_MANAGER_SLOT, 0); // undo the implementation lock for the test instance
-        irm_.initialize(owner_, manager_);
+        irm_ = new LinearKinkIrm(owner_, manager_);
     }
 
     function _defaultParams() internal pure returns (LinearKinkParams memory) {
@@ -223,30 +216,21 @@ contract LinearKinkIrmTest is Test {
         assertEq(irm.manager(), address(0xCAFE));
     }
 
-    /* INITIALIZATION */
+    /* CONSTRUCTION */
 
-    function test_initialize_isOneShot() public {
-        vm.expectRevert(bytes(OwnerManagerErrors.ALREADY_INITIALIZED));
-        irm.initialize(owner, manager);
+    function test_constructor_setsRoles() public {
+        LinearKinkIrm fresh = new LinearKinkIrm(owner, manager);
+        assertEq(fresh.owner(), owner);
+        assertEq(fresh.manager(), manager);
     }
 
-    function test_implementationIsLocked() public {
-        LinearKinkIrm impl = new LinearKinkIrm();
-        vm.expectRevert(bytes(OwnerManagerErrors.ALREADY_INITIALIZED));
-        impl.initialize(owner, manager);
-    }
-
-    function test_initialize_rejectsZeroOwner() public {
-        LinearKinkIrm fresh = new LinearKinkIrm();
-        vm.store(address(fresh), PACKED_MANAGER_SLOT, 0);
+    function test_constructor_rejectsZeroOwner() public {
         vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
-        fresh.initialize(address(0), manager);
+        new LinearKinkIrm(address(0), manager);
     }
 
-    function test_initialize_rejectsZeroManager() public {
-        LinearKinkIrm fresh = new LinearKinkIrm();
-        vm.store(address(fresh), PACKED_MANAGER_SLOT, 0);
+    function test_constructor_rejectsZeroManager() public {
         vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
-        fresh.initialize(owner, address(0));
+        new LinearKinkIrm(owner, address(0));
     }
 }
