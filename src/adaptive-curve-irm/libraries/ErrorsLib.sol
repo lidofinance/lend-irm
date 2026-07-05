@@ -5,8 +5,8 @@ pragma solidity ^0.8.0;
 /// @author Morpho Labs. Modified by Lido.
 /// @notice Library exposing error messages. Role/init errors live in OwnerManagerBase.
 library ErrorsLib {
-    /// @dev Thrown when the caller is not Morpho.
-    string internal constant NOT_MORPHO = "not Morpho";
+    /// @dev Thrown when the caller is not the router.
+    string internal constant NOT_ROUTER = "not router";
 
     /// @dev Thrown when a borrow rate is requested for a market that has no config set.
     string internal constant CONFIG_NOT_SET = "config not set";

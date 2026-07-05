@@ -8,8 +8,7 @@ import {LinearKinkParams} from "./ILinearKinkTypes.sol";
 
 /// @title ILinearKinkIrm
 /// @author Lido.
-/// @notice Interface exposed by the LinearKinkIrm. One instance serves many markets keyed by `Id`. The owner/manager
-/// surface (including `initialize`) is inherited from `IOwnerManager`.
+/// @notice Interface of the LinearKinkIrm: per-market kink params and the `IIrm` pricing surface.
 interface ILinearKinkIrm is IIrm, IOwnerManager {
     /// @notice Emitted when market `id`'s kink parameters are set.
     event MarketKinkParamsSet(Id indexed id, LinearKinkParams kinkParams);

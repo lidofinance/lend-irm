@@ -29,7 +29,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     });
 
     function setUp() public {
-        // morpho == owner == address(this): the test is both the Morpho caller and the owner (sets configs).
+        // router == owner == address(this): the test is both the trusted caller and the owner (sets configs).
         irm = _newIrm();
         _setConfig(address(irm), marketParams, _defaultConfig());
         vm.warp(90 days);
@@ -44,23 +44,20 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     /* Inherited from morpho-org/morpho-blue-irm @ 2bce6da, adapted to the AdaptiveCurveConfig constructor. */
 
     function testDeployment() public {
-        // The constructor rejects a zero morpho.
+        // The constructor rejects a zero router, owner, or manager.
         vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
-        new AdaptiveCurveIrm(address(0));
+        new AdaptiveCurveIrm(address(0), address(this), address(this));
 
-        // `initialize` rejects a zero owner, sets it once, and rejects a second call.
-        AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this));
-        // The constructor locks the implementation (isInitialized == true, packed with `manager` in slot 1); clear the
-        // slot so `initialize` runs.
-        vm.store(address(fresh), bytes32(uint256(1)), bytes32(0));
         vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
-        fresh.initialize(address(0), address(this));
+        new AdaptiveCurveIrm(address(this), address(0), address(this));
 
-        fresh.initialize(address(this), address(this));
-        assertEq(fresh.owner(), address(this), "owner set by initialize");
+        vm.expectRevert(bytes(OwnerManagerErrors.ZERO_ADDRESS));
+        new AdaptiveCurveIrm(address(this), address(this), address(0));
 
-        vm.expectRevert(bytes(OwnerManagerErrors.ALREADY_INITIALIZED));
-        fresh.initialize(address(this), address(this));
+        // A valid deployment sets both roles from the constructor.
+        AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this), address(0xA11CE), address(0xB0B));
+        assertEq(fresh.owner(), address(0xA11CE), "owner set by the constructor");
+        assertEq(fresh.manager(), address(0xB0B), "manager set by the constructor");
     }
 
     function testFirstBorrowRateUtilizationZero() public {
@@ -413,13 +410,13 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     /* ---- Access control ---- */
 
     /// Only Morpho may call state-changing borrowRate; borrowRateView stays open to anyone.
-    function testBorrowRateOnlyMorpho(address caller) public {
-        vm.assume(caller != address(this)); // address(this) is MORPHO (set in setUp)
+    function testBorrowRateOnlyRouter(address caller) public {
+        vm.assume(caller != address(this)); // address(this) is ROUTER (set in setUp)
         Market memory market = _market(1 ether, 0.9 ether);
 
         // State-changing borrowRate is Morpho-only.
         vm.prank(caller);
-        vm.expectRevert(bytes(ErrorsLib.NOT_MORPHO));
+        vm.expectRevert(bytes(ErrorsLib.NOT_ROUTER));
         irm.borrowRate(marketParams, market);
 
         // The view is permissionless; a non-Morpho caller can still read it.
@@ -473,18 +470,16 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         AdaptiveCurveIrm(address(irm)).setManager(address(0));
     }
 
-    /// initialize emits both role events: ownership from the zero address and the manager binding.
-    function testInitializeEmitsRoleEvents() public {
-        AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this));
-        vm.store(address(fresh), bytes32(uint256(1)), bytes32(0)); // unlock (see _newIrm)
+    /// The constructor emits both role events: ownership from the zero address and the manager binding.
+    function testConstructorEmitsRoleEvents() public {
         address owner_ = makeAddr("owner");
         address manager_ = makeAddr("manager");
 
-        vm.expectEmit(true, true, true, true, address(fresh));
+        vm.expectEmit(true, true, true, true);
         emit IOwnerManager.OwnershipTransferred(address(0), owner_);
-        vm.expectEmit(true, true, true, true, address(fresh));
+        vm.expectEmit(true, true, true, true);
         emit IOwnerManager.ManagerSet(manager_);
-        fresh.initialize(owner_, manager_);
+        new AdaptiveCurveIrm(address(this), owner_, manager_);
     }
 
     /// transferOwnership and setManager emit their role events with exact fields.
@@ -504,10 +499,8 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
 
     /// A manager distinct from the owner can set market curve params but cannot rotate either role.
     function testManagerRoleSeparation() public {
-        AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this));
-        vm.store(address(fresh), bytes32(uint256(1)), bytes32(0)); // unlock (see _newIrm)
         address manager_ = makeAddr("manager");
-        fresh.initialize(address(this), manager_);
+        AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this), address(this), manager_);
 
         MarketParams memory params;
         params.irm = address(fresh);
@@ -869,14 +862,9 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         });
     }
 
-    /// @dev Deploys an IRM with the test as morpho, owner, and manager.
+    /// @dev Deploys an IRM with the test as router, owner, and manager.
     function _newIrm() internal returns (AdaptiveCurveIrm irm_) {
-        irm_ = new AdaptiveCurveIrm(address(this));
-        // The constructor locks the implementation (isInitialized == true, packed with `manager` in slot 1); clear the
-        // slot so a direct-deployed IRM can be initialized in tests. `manager` is still zero here, so wiping the whole
-        // slot only unsets the lock.
-        vm.store(address(irm_), bytes32(uint256(1)), bytes32(0));
-        irm_.initialize(address(this), address(this));
+        irm_ = new AdaptiveCurveIrm(address(this), address(this), address(this));
     }
 
     /// @dev Points `irm_` at a config deployed from `config` for `params` (the test is owner/manager). Takes full

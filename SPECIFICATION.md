@@ -1,6 +1,6 @@
 # Lido Lend IRM — Specification
 
-This document specifies the two interest rate models of this fork. [AdaptiveCurveIrm](#adaptivecurveirm) is the upstream Morpho adaptive model plus the Lido additions — per-market configuration, an owner and a manager, reparametrization, an optional borrow-rate cap, and upgradeability. [LinearKinkIrm](#linearkinkirm) is fork-only, with no upstream counterpart: a stateless kinked ("jump rate") model, specified here from scratch. Both inherit the same owner/manager/`initialize` base (`OwnerManagerBase`) and are meant to run behind a proxy.
+This document specifies the three contracts of this fork: two interest rate models and the router in front of them. [AdaptiveCurveIrm](#adaptivecurveirm) is the upstream Morpho adaptive model plus the Lido additions — per-market configuration, an owner and a manager, reparametrization, and an optional borrow-rate cap. [LinearKinkIrm](#linearkinkirm) is fork-only, with no upstream counterpart: a stateless kinked ("jump rate") model, specified here from scratch. Both IRMs inherit the same owner/manager base (`OwnerManagerBase`) and are immutable standalone contracts with the roles set at construction. They are meant to sit behind [IrmRouter](#irmrouter) — the proxied contract markets are created with, which routes each market to an implementation and lets the router owner migrate a live market between rate models.
 
 ## AdaptiveCurveIrm
 
@@ -13,10 +13,10 @@ The curve and its adaptation are the [upstream Morpho model](https://github.com/
 - **per-market configuration** — the curve constants become a validated, immutable `AdaptiveCurveConfig` contract. The IRM keeps a per-market pointer to one and reads it through an external static call, so each market can define its own curve.
 - **owner and manager** — two privileged addresses in storage: the `owner` manages authorization (rotates itself and the `manager`), and either the `owner` or the `manager` sets a market's curve via a single `setMarketCurveParams` call that deploys (or reuses) the config internally.
 - **reparametrization** — the same call re-points a live market at a different curve without redeploying the market.
-- **upgradeability** — the IRM is meant to run behind a proxy. The `owner` and `manager` live in storage (set via `initialize`, rotated via `transferOwnership`/`setManager`), while changing the logic is a proxy upgrade to a freshly-constructed implementation, and the per-market configs, `rateAtTarget`, and both addresses persist.
+- **an immutable contract behind the router** — the IRM is a standalone, non-proxied contract whose `owner` and `manager` are set at construction (rotated via `transferOwnership`/`setManager`). It is meant to sit behind `IrmRouter` — the `ROUTER` immutable, the only caller `borrowRate` accepts — and upgradeability lives in the router: changing a market's rate logic means deploying a fresh implementation and re-routing the market (see the IrmRouter part).
 - an optional **borrow-rate cap** — a hard upper bound on the rate charged to borrowers, applied to the curve's output.
 
-The `borrowRate` / `borrowRateView` interface is unchanged, so the model is a drop-in replacement. `borrowRate` is still Morpho-only and state-changing, and `borrowRateView` is still public and read-only.
+The `borrowRate` / `borrowRateView` interface is unchanged, so the model is a drop-in replacement. `borrowRate` is still gated to a single trusted caller (`ROUTER`, the IrmRouter in production) and state-changing, and `borrowRateView` is still public and read-only.
 
 ### Configuration
 
@@ -26,7 +26,7 @@ Setting (or changing) a market's curve is a single privileged call:
 
 - **`setMarketCurveParams(marketParams, curveParams)`** derives the market `id` from `marketParams`, then resolves a config for `curveParams`: it deploys a fresh `AdaptiveCurveConfig(curveParams)` — whose constructor validates the parameters and reverts if any is out of range — unless a config for **identical** parameters was already deployed, in which case it reuses that one. The market is then pointed at the resolved config. Deployment and activation are a single step — there is no separate config-deployment surface.
 - **The IRM deduplicates by parameter hash.** `deployedCurveConfigs[keccak256(abi.encode(curveParams))]` caches the canonical config for a param-set, so identical parameters resolve to one shared `AdaptiveCurveConfig` across markets and calls (an immutable config is safely shareable). The first deployment for a hash emits `ConfigDeployed`, and every set emits `MarketCurveParamsSet`.
-- **The call is owner-or-manager gated.** `setMarketCurveParams` is callable only by the IRM `owner` or `manager` (storage variables, see Upgradeable), reverting `not authorized` otherwise. The IRM does not gate *which* parameters — it trusts the caller (governance / an operator) to choose an appropriate curve — validation guarantees only well-formedness, not economic soundness. This mirrors how Euler V2 gates its rate-model setter to the vault governor. A market with `marketCurveConfig == address(0)` is simply unpriced (reverts `config not set`) until set.
+- **The call is owner-or-manager gated.** `setMarketCurveParams` is callable only by the IRM `owner` or `manager` (storage variables, see Deployment and authorization), reverting `not authorized` otherwise. The IRM does not gate *which* parameters — it trusts the caller (governance / an operator) to choose an appropriate curve — validation guarantees only well-formedness, not economic soundness. This mirrors how Euler V2 gates its rate-model setter to the vault governor. A market with `marketCurveConfig == address(0)` is simply unpriced (reverts `config not set`) until set.
 
 | Parameter | Validation |
 | --- | --- |
@@ -67,18 +67,16 @@ Two more things to know about a reparametrization:
 * **The re-clamp is lazy.** `rateAtTarget` is re-clamped into the new range only on a call where utilization is off target **and** time has elapsed. Pointing a market at a tighter range followed by an at-target (or same-block) call leaves `rateAtTarget` out of range, used unchanged, until a later off-target call snaps it in. `maxBorrowRate` is the only bound that applies immediately in that interval.
 * **The new parameters apply to the whole period since the last update.** The first `borrowRate` after a swap averages over the entire interval since `market.lastUpdate`, which may precede the swap — old and new parameters are not blended at the swap timestamp. To settle the pre-reparametrization interval at the old parameters, call `accrueInterest` immediately before swapping.
 
-### Upgradeable
+### Deployment and authorization
 
-The IRM holds no curve parameters of its own. Its only immutable is `MORPHO` (read but never written). Its storage is laid out for a proxy and only ever appended to. The `owner` and `manager` come from the shared `OwnerManagerBase`, so they occupy the first slots: the `owner` (slot 0) and the `manager` packed with the `isInitialized` flag (slot 1). The IRM appends its own fields after them: the adapting `rateAtTarget[Id]` (slot 2), the per-market config pointer `marketCurveConfig[Id]` (slot 3), and the dedup cache `deployedCurveConfigs[hash]` (slot 4). The constructor takes only `morpho` and writes no proxy storage besides marking the *implementation itself* initialized (see below), so the `owner` and `manager` are set post-deployment via `initialize(owner, manager)` — a one-shot setter guarded on `isInitialized`, rejecting the zero address for either.
+The IRM holds no curve parameters of its own. It is an **immutable**, standalone contract — not proxied and not upgradeable. Its only immutable variable is `ROUTER`, the address whose calls `borrowRate` accepts: the `IrmRouter` in front of it. The constructor takes `(router, owner, manager)`, rejects a zero `router`, and sets the two roles directly (both rejecting the zero address) — there is no `initialize` and no implementation lock. Upgradeability lives in the router: a market is created with the router as its `irm`, and changing that market's rate logic means deploying a freshly-constructed implementation and re-routing the market via `setMarketIrm` (see the IrmRouter part) — this contract's math can never change in place.
 
-A single implementation sits behind an upgradeable **proxy**: `MORPHO` comes from the implementation's bytecode under `delegatecall`, and the storage belongs to the proxy. Deployment is deploy-implementation, deploy-proxy, then `initialize` — the last two (or all three) executed **atomically** by the deploying script so the owner/manager slots cannot be front-run. The constructor sets `isInitialized = true` on the implementation's own storage, so a raw implementation can never be `initialize`d directly — only a freshly-deployed proxy (whose storage starts zeroed) can be initialized, exactly once.
+The `owner` and `manager` come from the shared `OwnerManagerBase`, so they occupy the first slots: the `owner` (slot 0) and the `manager` (slot 1). The IRM appends its own fields after them: the adapting `rateAtTarget[Id]` (slot 2), the per-market config pointer `marketCurveConfig[Id]` (slot 3), and the dedup cache `deployedCurveConfigs[hash]` (slot 4).
 
 Two privileged addresses live in storage:
 
 - **`owner`** — rotates itself via `transferOwnership` and the manager via `setManager` (both owner-only, both rejecting the zero address, emitting `OwnershipTransferred` / `ManagerSet`), and may call `setMarketCurveParams`.
 - **`manager`** — an operational address that may call `setMarketCurveParams` (day-to-day curve setting) but holds no power over `owner`/`manager` themselves.
-
-Changing the curve logic is a **proxy upgrade** to a freshly-constructed implementation. The proxy's storage (every market's config pointer, the dedup cache, `rateAtTarget`, and both addresses) persists across the swap. The **proxy admin** remains the ultimate authority — it can overwrite any slot, including `owner`/`manager`, by upgrading — so a truly fixed owner and logic are reached only by ossifying the proxy. ERC-1967 impl/admin pointers sit in dedicated (keccak-derived) slots that never collide with the sequential storage slots. Any future storage field must be appended after `deployedCurveConfigs`. The proxy lives in the product repo. Each implementation must be constructed with the correct `MORPHO` and initialized with the correct owner and manager, a deploy/upgrade invariant for governance to uphold.
 
 ### Borrow-rate cap
 
@@ -112,17 +110,18 @@ This section states what each actor can do to the model. Who holds each, and thr
 
 **IRM manager** (operations) is scoped: it may call `setMarketCurveParams` — set or reparametrize any market's curve — but cannot change `owner` or `manager` (`transferOwnership`/`setManager` are owner-only). It exists so day-to-day curve tuning need not use the owner key. Its power over rates is the same as the owner's — it simply cannot change authorization.
 
-**Proxy admin** (governance) is the ultimate authority: it can upgrade the implementation, replacing the curve logic, and can overwrite any storage slot — including `owner`/`manager` — via that upgrade, while the per-market configs and `rateAtTarget` persist. This is the largest trust the design places. Constraints on the admin, owner, and manager (timelock, governance) are operational and outside this spec. A truly fixed owner and logic are reached only by ossifying the proxy.
+**No proxy admin, no upgrade path.** The rate math is immutable: no one can swap the curve logic under a market in place, and fixing an implementation bug means deploying a new implementation and migrating the affected markets at the `IrmRouter` — whose owner and proxy admin (the ultimate authority of this stack) are specified in the IrmRouter part. The trade-off is deliberate: what the owner and manager can do above is the full extent of anyone's power over this contract. Constraints on the owner and manager (timelock, governance) are operational and outside this spec.
 
-**Morpho** is the only caller of state-changing `borrowRate`, while `borrowRateView` is public and read-only. The model has no other privileged caller, and it depends on no external contract beyond the Morpho market that calls it and the `AdaptiveCurveConfig` it reads through a static call.
+**The `ROUTER` caller** — the `IrmRouter` in production — is the only caller of state-changing `borrowRate`, while `borrowRateView` is public and read-only. The model has no other privileged caller, and it depends on no external contract beyond the caller that prices through it and the `AdaptiveCurveConfig` it reads through a static call.
 
 ### References
 
 - Upstream IRM source at `morpho-org/morpho-blue-irm` @ `2bce6da` and the Morpho whitepaper — normative for the curve and its adaptation.
 - `FORK_NOTES.md` — the fork point and the full per-file delta against upstream.
-- `src/common/OwnerManagerBase.sol` (with `IOwnerManager.sol` and `OwnerManagerErrors.sol`) — the shared owner/manager/`initialize` base both IRMs inherit — normative for the authorization and initialization semantics this document describes.
-- `src/adaptive-curve-irm/interfaces/IAdaptiveCurveIrm.sol` — the typed contract surface: the per-market config pointer and dedup cache, `setMarketCurveParams`, the `owner` and `manager` addresses (`initialize`/`transferOwnership`/`setManager`), and the inherited `IIrm` interface.
-- `src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol` — the config contract surface (`getCurveParams()` and the per-field getters).
+- `src/common/OwnerManagerBase.sol` (with `IOwnerManager.sol` and `OwnerManagerErrors.sol`) — the two-role base all three contracts inherit, with the roles set from the inheriting constructor (or, for the router, via its own `initialize`) — normative for the authorization semantics this document describes.
+- `src/irm-router/IrmRouter.sol` — the proxied router this IRM sits behind, specified in the IrmRouter part below.
+- `src/adaptive-curve-irm/interfaces/IAdaptiveCurveIrm.sol` — the typed contract surface: the per-market config pointer and dedup cache, `setMarketCurveParams`, the `owner` and `manager` addresses (`transferOwnership`/`setManager`), and the inherited `IIrm` interface.
+- `src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol` — the per-market config contract surface (`getCurveParams()` and the per-field getters).
 - `src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol` — the shared top-level `AdaptiveCurveParams` struct.
 - `src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol` — the periphery recompute library described above.
 
@@ -132,7 +131,7 @@ This section states what each actor can do to the model. Who holds each, and thr
 
 `LinearKinkIrm` is the second IRM of this fork — fork-only, with no upstream counterpart (it replaces the removed upstream `FixedRateIrm`). It is the classic kinked ("jump rate") model of Compound's `JumpRateModel`, Aave's default reserve strategy, and Euler's `IRMLinearKink`: the per-second borrow rate is a piecewise-linear function of the market's current utilization that steepens past a kink at `optimalUtilization`.
 
-Unlike `AdaptiveCurveIrm`, the model is **stateless**: the rate depends only on the utilization Morpho passes in and the market's stored parameters. Nothing adapts over time, `borrowRate` writes nothing and returns exactly what `borrowRateView` returns, and when a rate should move, the owner or manager moves it by setting new parameters. One instance serves many markets keyed by `Id`, with authorization, `initialize`, and the proxy model shared with `AdaptiveCurveIrm` through `OwnerManagerBase`.
+Unlike `AdaptiveCurveIrm`, the model is **stateless**: the rate depends only on the utilization Morpho passes in and the market's stored parameters. Nothing adapts over time, `borrowRate` writes nothing and returns exactly what `borrowRateView` returns, and when a rate should move, the owner or manager moves it by setting new parameters. One instance serves many markets keyed by `Id`, with authorization shared with `AdaptiveCurveIrm` through `OwnerManagerBase` and the same immutable, behind-the-router deployment (roles set at construction).
 
 ### The curve
 
@@ -163,13 +162,13 @@ Each market's four parameters are packed into a single storage slot (`LinearKink
 - **Reparametrization is the same call.** There is no config contract and no dedup cache here — parameters are overwritten where they live, and because nothing adapts there is no state to carry across: the new curve prices the very next `borrowRate` in full. As in the adaptive model, the first call after a change applies the new parameters to the whole period since `market.lastUpdate` — to settle the old interval at the old curve, call `accrueInterest` immediately before changing.
 - **An unconfigured market cannot be priced.** `optimalUtilization == 0` is the unset sentinel — validation makes it unreachable for a configured market — and `borrowRate`/`borrowRateView` revert with `config not set` until parameters are set.
 
-### Upgradeable
+### Deployment and authorization
 
-Authorization, `initialize`, the implementation lock, and the proxy model are the shared `OwnerManagerBase` semantics specified in the AdaptiveCurveIrm part above (`owner` slot 0, `manager` packed with `isInitialized` slot 1). This contract appends only `marketKinkParams[Id]` (slot 2), and any future field after it. There is no `MORPHO` immutable and no constructor argument: the constructor only locks the implementation. `MAX_BORROW_RATE` is a compile-time constant in the implementation bytecode — changing it is a logic upgrade.
+The deployment stance is the shared one specified in the AdaptiveCurveIrm part above: an immutable standalone contract with the `OwnerManagerBase` roles set at construction (`owner` slot 0, `manager` slot 1), meant to sit behind `IrmRouter`, with upgradeability living in the router. The constructor takes only `(owner, manager)` — there is no `ROUTER` immutable and no caller gate to construct, since `borrowRate` is a read (see Trust Assumptions). This contract appends only `marketKinkParams[Id]` (slot 2). `MAX_BORROW_RATE` is a compile-time constant in the bytecode — changing it means a new implementation, routed in via the router.
 
 ### Trust Assumptions
 
-The **owner** and **manager** hold the same power as in the adaptive model, in a more immediate form: `setMarketKinkParams` moves a market's rate discontinuously on the next call — bounded by `MAX_BORROW_RATE` — with no adapting state to smooth the change. The **proxy admin** remains the ultimate authority, as above. The model never custodies funds.
+The **owner** and **manager** hold the same power as in the adaptive model, in a more immediate form: `setMarketKinkParams` moves a market's rate discontinuously on the next call — bounded by `MAX_BORROW_RATE` — with no adapting state to smooth the change. As in the adaptive model there is no proxy admin and no upgrade path — replacing the logic means a new implementation routed in at the `IrmRouter`. The model never custodies funds.
 
 Unlike the adaptive IRM, `borrowRate` is not Morpho-gated: there is no state to protect, so it is a read, callable by anyone, and Morpho's accrual simply reads it through the `IIrm` interface. The contract depends on no external contract at all — the market state is passed in by value and the parameters live in its own storage.
 
@@ -179,3 +178,55 @@ Unlike the adaptive IRM, `borrowRate` is not Morpho-gated: there is no state to 
 - `src/linear-kink-irm/interfaces/ILinearKinkTypes.sol` — the packed `LinearKinkParams` struct.
 - Compound's `JumpRateModel`, Euler's `IRMLinearKink`, Aave's `DefaultReserveInterestRateStrategy` — the model family — this contract is a from-scratch implementation, not a port of any of them.
 - `TEST_PLAN.md` (§7) and `certora/specs/LinearKinkIrm.spec` — the test and formal-verification coverage of the properties above.
+
+## IrmRouter
+
+### Overview
+
+A Morpho market can never change its `irm`, so markets are created pointing at `IrmRouter` — the fork's one eternal address. It implements the `IIrm` surface and forwards `borrowRate` / `borrowRateView` to a per-market implementation — `AdaptiveCurveIrm`, `LinearKinkIrm`, or any future `IIrm` — chosen by the router `owner`. That indirection is what upgradeability means in this fork: the market keeps pricing through the same address while the rate model behind it can be switched, so a live market can migrate between models.
+
+Implementations are standalone immutable contracts, called with a plain CALL (no delegatecall). Each holds its own per-market state and parameters, and a state-changing implementation must be constructed with its `ROUTER` immutable set to the router address so it accepts the router's calls (the stateless `LinearKinkIrm` has no such gate). `borrowRate` is Morpho-only (`not Morpho` otherwise) and `borrowRateView` is public, and both revert `irm not set` for a market that has not been routed. The mapping `marketIrm[Id]` can be re-pointed but never cleared (`setMarketIrm` rejects the zero address), so a market once routed always prices.
+
+### Routing
+
+Routing (and re-routing) a market is a single privileged call:
+
+- **`setMarketIrm(marketParams, irm)`** requires `marketParams` to carry the router itself as its `irm` (the id commits to that field, so a mistyped address would route a phantom market), derives the market `id`, and, when the market is already live (`lastUpdate != 0`), first calls Morpho's `accrueInterest(marketParams)` — the period since the last update is settled at the **old** model's rate, so the new model prices only time after the switch — and then probes the new implementation with the exact call Morpho will make at the next accrual: `irm.borrowRate(marketParams, market)`, sent by the router itself. Only after the probe succeeds is `marketIrm[id]` stored and `MarketIrmSet` emitted. A not-yet-created market is routed **without touching the implementation**: there is nothing to accrue or brick, a probe would prematurely write a stateful model's `rateAtTarget` (a repeated pre-creation probe would then decay the seeded rate over the whole epoch), and `createMarket` performs the correct first-interaction ping itself, with `lastUpdate` freshly stamped.
+- **The probe is the safety gate for live markets.** A routed implementation that reverts would brick every interaction with the market (Morpho accrues on each one), so a live-market switch reverts unless the implementation can actually price the market: an unconfigured market (`config not set`) and an implementation constructed with the wrong `ROUTER` (`not router`) both fail here. The ungated `borrowRateView` would not catch the second, which is why the probe is the state-changing call. When attaching a fresh `AdaptiveCurveIrm` to a live market, the probe also seeds the market's `rateAtTarget` (see Migration). For a not-yet-created market the same failures surface at `createMarket`, which reverts and creates nothing — a fail-safe, not a brick.
+- **The call is owner-or-manager gated.** Like the parameter setters on the implementations, routing is the operational surface: the router `owner` or `manager` may call it (`not authorized` otherwise), while rotating the roles themselves stays owner-only.
+
+Ordering for a **new** market: route it (`setMarketIrm`) and set the implementation's per-market config (`setMarketCurveParams` / `setMarketKinkParams`) in either order, then `createMarket` — market creation pings `borrowRate` through the router and reverts `irm not set` until the market is routed and `config not set` until the implementation is configured. Pre-creation routing is idempotent: re-routing any number of times writes no implementation state.
+
+### Migration
+
+The router settles the old model and probes the new one, but each implementation keeps its own per-market state, and that state is what a migration must mind:
+
+- **Away from an `AdaptiveCurveIrm`.** The switch's `accrueInterest` closes the old model's period at its rate, and the old implementation's `rateAtTarget[id]` is left behind, frozen at its last value.
+- **To a fresh `AdaptiveCurveIrm`.** The market is new to the implementation, so the first interaction seeds `rateAtTarget[id] = initialRateAtTarget` from the market's configured curve — the live-market probe for a migration, or `createMarket`'s own ping for a launch. To carry the previous rate across the migration, snapshot it and choose `initialRateAtTarget` equal to the snapshot when configuring the curve — adaptation then continues from where the old model left off instead of jumping.
+- **Back to a previously-used `AdaptiveCurveIrm`.** Its `rateAtTarget[id]` still holds the value frozen when the market was routed away, and the probe resumes adaptation from that **stale** value, not from `initialRateAtTarget` (the seeding path runs only while the stored value is zero). To re-enter at a chosen rate, use a fresh `AdaptiveCurveIrm` instance per re-entry rather than reusing one with stale state.
+- **`LinearKinkIrm`, either direction.** The model is stateless — the rate depends only on the passed-in utilization and the stored parameters — so it migrates seamlessly: nothing to seed, nothing to go stale, the configured curve prices the very next call in full.
+
+### Upgradeable
+
+The router — not the IRMs — is the proxied contract of this fork. Its only immutable is `MORPHO` (Morpho itself, read from the implementation's bytecode under `delegatecall`). Its storage sits at an ERC-7201 namespaced base slot (`layout at`, namespace `lido.lend.storage.IrmRouter`) and is only ever appended to: the `owner` (base) and the `manager` packed with the `isInitialized` flag (base + 1) come from the shared `OwnerManagerBase`, and the router appends `marketIrm[Id]` (base + 2) along with the flag itself. The constructor takes only `morpho` and writes no proxy storage besides marking the *implementation itself* initialized, so the `owner` and `manager` are set post-deployment via `initialize(owner, manager)` — a one-shot setter guarded on `isInitialized`, rejecting the zero address for either. Deployment is deploy-implementation, deploy-proxy, then `initialize` — the last two (or all three) executed **atomically** by the deploying script so the owner/manager slots cannot be front-run. A raw implementation can never be `initialize`d directly — only a freshly-deployed proxy (whose storage starts zeroed) can be, exactly once.
+
+Changing the routing logic is a **proxy upgrade** to a freshly-constructed implementation. The proxy's storage — every market's `marketIrm` pointer and both addresses — persists across the swap. ERC-1967 impl/admin pointers sit in dedicated slots that never collide with the router's ERC-7201 namespaced storage. Any future storage field must be appended after `marketIrm`. The proxy lives in the product repo. Each implementation must be constructed with the correct `MORPHO` (and the first one initialized with the correct owner and manager), a deploy/upgrade invariant for governance to uphold.
+
+### Trust Assumptions
+
+**Morpho's IRM whitelist stops at the router.** `enableIrm` whitelists only the router address, and from then on the choice of implementation for every router-fronted market belongs to the router `owner`, forever — Morpho's whitelist cannot constrain, vet, or revoke individual implementations. Enabling the router is a delegation of the per-market IRM choice to the router's governance, and integrators must evaluate that governance, not just the whitelisted address.
+
+**Router owner** (governance) holds authorization and the routing: it rotates itself (`transferOwnership`) and the `manager` (`setManager`), and can point any market at any `IIrm` in a single transaction (subject to the probe), swapping the market's entire rate model — and with it every future rate the market reads. The router never custodies funds — this is power over which model Morpho reads, not over deposits.
+
+**Router manager** (operations) is scoped the same way as on the implementations: it may call `setMarketIrm` — route or re-route any market — but cannot change `owner` or `manager`. Its power over which model prices a market is the same as the owner's, and it is trusted accordingly: a routed implementation is arbitrary code the router calls on every accrual, bounded only by the probe.
+
+**Proxy admin** (governance) is the ultimate authority: it can upgrade the router implementation, replacing the routing logic, and can overwrite any storage slot — including `owner`/`manager` and any `marketIrm` pointer — via that upgrade. This is the largest trust the design places, and it is deliberately concentrated here: the rate math in the implementations is immutable, so fixing an implementation bug means deploying a new implementation and migrating markets, never rewriting a model in place. Constraints on the admin and owner (timelock, governance) are operational and outside this spec. A truly fixed routing is reached only by ossifying the proxy.
+
+**Morpho** is the only caller of state-changing `borrowRate`, while `borrowRateView` is public and read-only. The router depends only on Morpho (market state and accrual during a switch) and on the implementations it forwards to.
+
+### References
+
+- `src/irm-router/IrmRouter.sol` — the contract this part specifies.
+- `src/irm-router/interfaces/IIrmRouter.sol` — the typed contract surface: `MORPHO()`, `marketIrm(Id)`, `setMarketIrm` (with the `MarketIrmSet` event), `isInitialized()`/`initialize`, and the inherited `IIrm` and `IOwnerManager` interfaces.
+- `src/irm-router/libraries/ErrorsLib.sol` — the router's errors (`not Morpho`, `irm not set`, `irm is not this router`).
+- `TEST_PLAN.md` (§§6, 8) and `certora/specs/IrmRouter.spec` — the test and formal-verification coverage of the properties above.

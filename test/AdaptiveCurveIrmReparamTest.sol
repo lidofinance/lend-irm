@@ -371,14 +371,9 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         _register(address(irm), params, config);
     }
 
-    /// @dev Deploys the IRM directly (no proxy) and clears the implementation lock so it can be initialized with the
-    /// test as owner and manager, letting it call `setMarketCurveParams`.
+    /// @dev Deploys the IRM with the test as morpho, owner, and manager, letting it call `setMarketCurveParams`.
     function _deployIrm() internal returns (AdaptiveCurveIrm deployed) {
-        deployed = new AdaptiveCurveIrm(address(this));
-        // `isInitialized` is packed with `manager` in slot 1 (both zero-clearable here since manager is unset);
-        // clearing it lets a directly-deployed (non-proxy) IRM be initialized.
-        vm.store(address(deployed), bytes32(uint256(1)), bytes32(0));
-        deployed.initialize(address(this), address(this));
+        deployed = new AdaptiveCurveIrm(address(this), address(this), address(this));
     }
 
     function _register(address irmAddress, MarketParams memory marketParams, AdaptiveCurveParams memory config)

@@ -22,14 +22,9 @@ contract AdaptiveCurveIrmLibTest is Test {
         adaptiveCurveIrm = _deploy();
     }
 
-    /// @dev A bare IRM with the test as morpho and owner (so it can set configs).
+    /// @dev A bare IRM with the test as morpho, owner, and manager (so it can set configs).
     function _deploy() internal returns (address) {
-        AdaptiveCurveIrm irm_ = new AdaptiveCurveIrm(address(this));
-        // The constructor locks the implementation (isInitialized=true); it packs into slot 1 alongside `manager`.
-        // Clear the slot so this direct-deploy (not behind a proxy) can be initialized with the test as owner+manager.
-        vm.store(address(irm_), bytes32(uint256(1)), bytes32(0));
-        irm_.initialize(address(this), address(this));
-        return address(irm_);
+        return address(new AdaptiveCurveIrm(address(this), address(this), address(this)));
     }
 
     /// @dev The periphery's target curve: default constants with a configurable cap, so tests can vary just the cap.
