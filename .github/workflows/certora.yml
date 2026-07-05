@@ -18,6 +18,10 @@ jobs:
         conf:
           - BorrowRateView
           - ExpectedMarketBalances
+          - IrmRouter
+          - LinearKinkIrm
+          - MaxBorrowRate
+          - RateAtTargetBand
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -35,11 +39,12 @@ jobs:
       - name: Install certora
         run: pip install certora-cli
 
-      - name: Install solc (0.8.19)
+      # A single solc: the LidoLend core and the IRM sources both compile with 0.8.35.
+      - name: Install solc (0.8.35)
         run: |
-          wget https://github.com/ethereum/solidity/releases/download/v0.8.19/solc-static-linux
+          wget https://github.com/ethereum/solidity/releases/download/v0.8.35/solc-static-linux
           chmod +x solc-static-linux
-          sudo mv solc-static-linux /usr/local/bin/solc-0.8.19
+          sudo mv solc-static-linux /usr/local/bin/solc-0.8.35
 
       - name: Verify ${{ matrix.conf }}
         run: certoraRun certora/confs/${{ matrix.conf }}.conf

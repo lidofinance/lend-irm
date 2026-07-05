@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build:
-    name: Compilation (via IR)
+    name: Compilation
     runs-on: ubuntu-latest
 
     steps:
