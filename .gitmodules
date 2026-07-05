@@ -4,6 +4,6 @@
 [submodule "lib/solmate"]
 	path = lib/solmate
 	url = https://github.com/transmissions11/solmate
-[submodule "lib/morpho-blue"]
-	path = lib/morpho-blue
-	url = https://github.com/morpho-org/morpho-blue
+[submodule "lib/lido-lend"]
+	path = lib/lido-lend
+	url = git@github.com:lidofinance/lido-lend

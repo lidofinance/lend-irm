@@ -2,9 +2,9 @@
 pragma solidity ^0.8.0;
 
 import {AdaptiveCurveIrmLib} from "../../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
-import {MorphoBalancesLib} from "../../lib/morpho-blue/src/libraries/periphery/MorphoBalancesLib.sol";
-import {Id, Market, MarketParams, IMorpho} from "../../lib/morpho-blue/src/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "../../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
+import {MorphoBalancesLib} from "../../lib/lido-lend/src/libraries/periphery/MorphoBalancesLib.sol";
+import {Id, Market, MarketParams, IMorpho} from "../../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {MarketParamsLib} from "../../lib/lido-lend/src/libraries/MarketParamsLib.sol";
 
 contract AdaptiveCurveIrmLibHarness {
     using MarketParamsLib for MarketParams;

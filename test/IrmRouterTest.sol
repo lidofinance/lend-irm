@@ -13,16 +13,16 @@ import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 import {TestERC1967Proxy} from "./IrmRouterProxyTest.sol";
 
-import {IIrm} from "../lib/morpho-blue/src/interfaces/IIrm.sol";
-import {MarketParamsLib} from "../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
-import {MathLib} from "../lib/morpho-blue/src/libraries/MathLib.sol";
-import {Id, MarketParams, Market} from "../lib/morpho-blue/src/interfaces/IMorpho.sol";
+import {IIrm} from "../lib/lido-lend/src/interfaces/IIrm.sol";
+import {MarketParamsLib} from "../lib/lido-lend/src/libraries/MarketParamsLib.sol";
+import {MathLib} from "../lib/lido-lend/src/libraries/MathLib.sol";
+import {Id, MarketParams, Market} from "../lib/lido-lend/src/interfaces/IMorpho.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
-/// A minimal stand-in for Morpho (the real Morpho.sol pins solc 0.8.19 and cannot compile here): it stores markets,
-/// pings the market's IRM as Morpho does, and stamps `lastUpdate` -- the exact surface IrmRouter interacts
-/// with.
+/// A minimal stand-in for the LidoLend core, keeping this suite a unit test with direct market-state control: it
+/// stores markets, pings the market's IRM as the core does, and stamps `lastUpdate` -- the exact surface IrmRouter
+/// interacts with.
 contract MorphoMock {
     using MarketParamsLib for MarketParams;
     using MathLib for uint256;

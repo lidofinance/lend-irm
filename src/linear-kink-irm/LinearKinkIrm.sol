@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 
-import {IIrm} from "../../lib/morpho-blue/src/interfaces/IIrm.sol";
+import {IIrm} from "../../lib/lido-lend/src/interfaces/IIrm.sol";
 import {ILinearKinkIrm} from "./interfaces/ILinearKinkIrm.sol";
 import {LinearKinkParams} from "./interfaces/ILinearKinkTypes.sol";
 import {OwnerManagerBase} from "../common/OwnerManagerBase.sol";
 
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
-import {MarketParamsLib} from "../../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
-import {Id, MarketParams, Market} from "../../lib/morpho-blue/src/interfaces/IMorpho.sol";
-import {MathLib, WAD} from "../../lib/morpho-blue/src/libraries/MathLib.sol";
+import {MarketParamsLib} from "../../lib/lido-lend/src/libraries/MarketParamsLib.sol";
+import {Id, MarketParams, Market} from "../../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {MathLib, WAD} from "../../lib/lido-lend/src/libraries/MathLib.sol";
 
 /// @title LinearKinkIrm
 /// @author Lido.
