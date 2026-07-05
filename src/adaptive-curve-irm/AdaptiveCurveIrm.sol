@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 
-import {IIrm} from "../../lib/morpho-blue/src/interfaces/IIrm.sol";
+import {IIrm} from "../../lib/lido-lend/src/interfaces/IIrm.sol";
 import {IAdaptiveCurveIrm} from "./interfaces/IAdaptiveCurveIrm.sol";
 import {IAdaptiveCurveConfig} from "./interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "./interfaces/IAdaptiveCurveTypes.sol";
@@ -13,9 +13,9 @@ import {UtilsLib} from "./libraries/UtilsLib.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
 import {ExpLib} from "./libraries/ExpLib.sol";
 import {MathLib, WAD_INT as WAD} from "./libraries/MathLib.sol";
-import {MarketParamsLib} from "../../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
-import {Id, MarketParams, Market} from "../../lib/morpho-blue/src/interfaces/IMorpho.sol";
-import {MathLib as MorphoMathLib} from "../../lib/morpho-blue/src/libraries/MathLib.sol";
+import {MarketParamsLib} from "../../lib/lido-lend/src/libraries/MarketParamsLib.sol";
+import {Id, MarketParams, Market} from "../../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {MathLib as MorphoMathLib} from "../../lib/lido-lend/src/libraries/MathLib.sol";
 
 /// @title AdaptiveCurveIrm
 /// @author Morpho Labs. Modified by Lido.

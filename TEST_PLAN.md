@@ -114,7 +114,7 @@ Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage 
 
 ## 7. Formal verification (Certora)
 
-Specs live in `certora/{confs,specs}/`, and all rules pass. `ExpectedMarketBalances.conf` maps `lib/morpho-blue`'s core to `solc-0.8.19` via `solc_map` (upstream pins that pragma), while the IRM sources compile with `solc-0.8.35`.
+Specs live in `certora/{confs,specs}/`, and all rules pass. All confs pin `solc-0.8.35` — the LidoLend core compiles with the same solc as the IRM sources, so `ExpectedMarketBalances.conf` links `lib/lido-lend/src/LidoLend.sol` directly.
 
 | Proves | Conf |
 |---|---|
@@ -153,4 +153,4 @@ Specs live in `certora/{confs,specs}/`, and all rules pass. `ExpectedMarketBalan
 | `createMarket` pings `borrowRate` through the router — it reverts for an unrouted market and succeeds after config + `setMarketIrm` | `test_createMarket_revertsUntilRouted` |
 | A live market migrates between models and is priced by the correct model after each switch, the old rate carries onto a fresh adaptive implementation when `initialRateAtTarget` is chosen equal to its snapshot, and a route back to a previously-used adaptive implementation resumes from its stale `rateAtTarget` | `test_migration_kinkToAdaptiveAndBack`, `test_migration_snapshotSeedsFreshAdaptive`, `test_migration_backToUsedAdaptiveResumesStaleRate` |
 
-The mock Morpho stands in for the real core (`Morpho.sol` pins `pragma 0.8.19` exactly and cannot compile with the `0.8.35` sources): it stores markets, pings the market's IRM the way Morpho does on accrual and creation, and stamps `lastUpdate`.
+The mock stands in for the LidoLend core, keeping the suite a unit test with direct market-state control: it stores markets, pings the market's IRM the way the core does on accrual and creation, and stamps `lastUpdate`.

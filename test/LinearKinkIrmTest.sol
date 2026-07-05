@@ -5,8 +5,8 @@ import {LinearKinkIrm} from "../src/linear-kink-irm/LinearKinkIrm.sol";
 import {LinearKinkParams} from "../src/linear-kink-irm/interfaces/ILinearKinkTypes.sol";
 import {ErrorsLib} from "../src/linear-kink-irm/libraries/ErrorsLib.sol";
 import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
-import {MarketParamsLib} from "../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
-import {Id, MarketParams, Market} from "../lib/morpho-blue/src/interfaces/IMorpho.sol";
+import {MarketParamsLib} from "../lib/lido-lend/src/libraries/MarketParamsLib.sol";
+import {Id, MarketParams, Market} from "../lib/lido-lend/src/interfaces/IMorpho.sol";
 
 import "../lib/forge-std/src/Test.sol";
 

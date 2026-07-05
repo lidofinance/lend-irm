@@ -5,8 +5,8 @@ import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiv
 import {MathLib, WAD_INT as WAD} from "../src/adaptive-curve-irm/libraries/MathLib.sol";
 import {UtilsLib} from "../src/adaptive-curve-irm/libraries/UtilsLib.sol";
 import {ExpLib} from "../src/adaptive-curve-irm/libraries/ExpLib.sol";
-import {Market} from "../lib/morpho-blue/src/interfaces/IMorpho.sol";
-import {MathLib as MorphoMathLib} from "../lib/morpho-blue/src/libraries/MathLib.sol";
+import {Market} from "../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {MathLib as MorphoMathLib} from "../lib/lido-lend/src/libraries/MathLib.sol";
 
 /// @dev The differential tests' oracle: recomputes the borrow rate from scratch (curve + adaptation + cap) so a
 /// contract's output can be checked against an independent implementation, parametrized by the market's params.

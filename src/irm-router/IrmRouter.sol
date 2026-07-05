@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 
-import {IIrm} from "../../lib/morpho-blue/src/interfaces/IIrm.sol";
+import {IIrm} from "../../lib/lido-lend/src/interfaces/IIrm.sol";
 import {IIrmRouter} from "./interfaces/IIrmRouter.sol";
-import {Id, MarketParams, Market, IMorpho} from "../../lib/morpho-blue/src/interfaces/IMorpho.sol";
-import {MarketParamsLib} from "../../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
+import {Id, MarketParams, Market, IMorpho} from "../../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {MarketParamsLib} from "../../lib/lido-lend/src/libraries/MarketParamsLib.sol";
 import {OwnerManagerBase} from "../common/OwnerManagerBase.sol";
 import {OwnerManagerErrors} from "../common/OwnerManagerErrors.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";

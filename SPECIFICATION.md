@@ -214,7 +214,7 @@ Changing the routing logic is a **proxy upgrade** to a freshly-constructed imple
 
 ### Trust Assumptions
 
-**Morpho's IRM whitelist stops at the router.** `enableIrm` whitelists only the router address, and from then on the choice of implementation for every router-fronted market belongs to the router `owner`, forever — Morpho's whitelist cannot constrain, vet, or revoke individual implementations. Enabling the router is a delegation of the per-market IRM choice to the router's governance, and integrators must evaluate that governance, not just the whitelisted address.
+**The core's IRM choice stops at the router.** LidoLend's `createMarket` is owner-gated and enables the market's `irm` implicitly, so the core owner chooses the router once, at market creation — and from then on the choice of implementation for every router-fronted market belongs to the router `owner`, forever. The core cannot constrain, vet, or revoke individual implementations. Creating markets on the router is a delegation of the per-market IRM choice to the router's governance, and integrators must evaluate that governance, not just the market's `irm` address.
 
 **Router owner** (governance) holds authorization and the routing: it rotates itself (`transferOwnership`) and the `manager` (`setManager`), and can point any market at any `IIrm` in a single transaction (subject to the probe), swapping the market's entire rate model — and with it every future rate the market reads. The router never custodies funds — this is power over which model Morpho reads, not over deposits.
 

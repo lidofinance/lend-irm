@@ -3,9 +3,9 @@ pragma solidity ^0.8.0;
 
 import {IrmRouter} from "../src/irm-router/IrmRouter.sol";
 import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
-import {IIrm} from "../lib/morpho-blue/src/interfaces/IIrm.sol";
-import {MarketParamsLib} from "../lib/morpho-blue/src/libraries/MarketParamsLib.sol";
-import {Id, MarketParams, Market} from "../lib/morpho-blue/src/interfaces/IMorpho.sol";
+import {IIrm} from "../lib/lido-lend/src/interfaces/IIrm.sol";
+import {MarketParamsLib} from "../lib/lido-lend/src/libraries/MarketParamsLib.sol";
+import {Id, MarketParams, Market} from "../lib/lido-lend/src/interfaces/IMorpho.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
