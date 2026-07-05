@@ -5,8 +5,8 @@ using AdaptiveCurveIrmLibHarness as AdaptiveCurveIrmLibHarness;
 using Morpho as Morpho;
 
 // Both paths reach the IRM's borrow rate, which reads the market's curve params from its AdaptiveCurveConfig via an external
-// `getCurveParams()` static call (the config address resolved from the `config` registry). `getCurveParams()` is
-// summarized to a single ghost-backed Params and the registry/state reads are dispatched to the linked IRM, so the
+// `getCurveParams()` static call (the config address resolved from the `marketCurveConfig` mapping). `getCurveParams()` is
+// summarized to a single ghost-backed Params and the mapping/state reads are dispatched to the linked IRM, so the
 // lib reads the same state and params as the contract.
 ghost int256 g_curveSteepness;
 ghost int256 g_adjustmentSpeed;

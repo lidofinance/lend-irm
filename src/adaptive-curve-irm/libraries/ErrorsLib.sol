@@ -3,22 +3,10 @@ pragma solidity ^0.8.0;
 
 /// @title ErrorsLib
 /// @author Morpho Labs. Modified by Lido.
-/// @notice Library exposing error messages.
+/// @notice Library exposing error messages. Role/init errors live in OwnerManagerBase.
 library ErrorsLib {
-    /// @dev Thrown when passing the zero address.
-    string internal constant ZERO_ADDRESS = "zero address";
-
     /// @dev Thrown when the caller is not Morpho.
     string internal constant NOT_MORPHO = "not Morpho";
-
-    /// @dev Thrown when the caller of an owner-only function is not the owner.
-    string internal constant NOT_OWNER = "not owner";
-
-    /// @dev Thrown when the caller of setMarketCurveParams is neither the owner nor the manager.
-    string internal constant NOT_AUTHORIZED = "not authorized";
-
-    /// @dev Thrown when `initialize` is called on an already-initialized contract.
-    string internal constant ALREADY_INITIALIZED = "already initialized";
 
     /// @dev Thrown when a borrow rate is requested for a market that has no config set.
     string internal constant CONFIG_NOT_SET = "config not set";

@@ -1,6 +1,6 @@
-# AdaptiveCurveIrm Fork — Test Plan
+# Lido Lend IRM — Test Plan
 
-The fork makes additive changes to Morpho's `AdaptiveCurveIrm`: per-market curve parameters (immutable `AdaptiveCurveConfig` contracts, deployed and deduplicated by the IRM itself), an owner/manager authorization model, an optional borrow-rate cap, reparametrization by re-pointing a market at new parameters, proxy-compatibility, and a periphery library that reads params live from the pointed-at config. The curve math and its adaptation are unchanged from upstream. Each section below states what changed and maps every covered property to its test. The rest is inherited Morpho, covered by the retained upstream suite, adapted to the per-market-config model (the IRM is `initialize`d with an owner and manager, and a default config from `test/ConstantsLib.sol` is set per market via `setMarketCurveParams`; `testConstants` dropped, now covered by `AdaptiveCurveConfig` validation; the `vm.assume` market filters reworked into `bound`-based squeezing so deep fuzz campaigns pass at Foundry's default rejection cap). `FixedRateIrm`, `ExpLib`, and `UtilsLib` are unchanged from upstream and keep their upstream suites (`FixedRateIrmTest`, `ExpLibTest`, `UtilsLibTest`) as-is.
+The fork makes additive changes to Morpho's `AdaptiveCurveIrm`: per-market curve parameters (immutable `AdaptiveCurveConfig` contracts, deployed and deduplicated by the IRM itself), an owner/manager authorization model (extracted into the shared `OwnerManagerBase`), an optional borrow-rate cap, reparametrization by re-pointing a market at new parameters, proxy-compatibility, and a periphery library that reads params live from the pointed-at config. The curve math and its adaptation are unchanged from upstream. Each section below states what changed and maps every covered property to its test. The rest is inherited Morpho, covered by the retained upstream suite, adapted to the per-market-config model: the IRM is `initialize`d with an owner and manager, a default config from `test/ConstantsLib.sol` is set per market via `setMarketCurveParams`, `testConstants` is dropped (now covered by `AdaptiveCurveConfig` validation), and the `vm.assume` market filters are reworked into `bound`-based squeezing so deep fuzz campaigns pass at Foundry's default rejection cap. The upstream `FixedRateIrm` is removed and replaced by the fork-only `LinearKinkIrm` (§8). `ExpLib` and `UtilsLib` are unchanged from upstream and keep their upstream suites (`ExpLibTest`, `UtilsLibTest`) as-is.
 
 | Change | Suites |
 |---|---|
@@ -10,26 +10,26 @@ The fork makes additive changes to Morpho's `AdaptiveCurveIrm`: per-market curve
 | Reparametrization | `AdaptiveCurveIrmReparamTest` |
 | Periphery library | `AdaptiveCurveIrmLibTest`, Certora `BorrowRateView` / `ExpectedMarketBalances` |
 | Upgradeable (proxy) | `AdaptiveCurveIrmProxyTest` |
+| LinearKinkIrm (replaces `FixedRateIrm`) | `LinearKinkIrmTest`, Certora `LinearKinkIrm` |
 
-**Exactness policy.** Every check is exact: the suites assert equality against `test/CurveRefHelper.sol` — an independent reference implementation of the curve, adaptation, and cap, parametrized by the market's params — or against closed-form expected values. There are no directional (`Gt`/`Lt`) assertions; the only two inequalities left are documented domain properties in `ExpLibTest` (`testWExpPositive`/`testWExpNegative`), which have no exact counterpart. The upstream ping-every-minute scenarios and the stateful invariant are differential: every interaction in them is asserted equal to the reference.
+**Exactness policy.** Every adaptive-curve check is exact: the suites assert equality against `test/CurveRefHelper.sol` — an independent reference implementation of the curve, adaptation, and cap, parametrized by the market's params — or against closed-form expected values. There are no directional (`Gt`/`Lt`) assertions in the adaptive suites. The two documented exceptions are the domain properties in `ExpLibTest` (`testWExpPositive`/`testWExpNegative`), which have no exact counterpart, and `LinearKinkIrmTest.testFuzz_monotonicAndBounded`, whose monotonicity claim is inherently directional (the kink suite's point checks are closed-form exact). The upstream ping-every-minute scenarios and the stateful invariant are differential: every interaction in them is asserted equal to the reference.
 
 Run with `forge test`. Deep campaigns need only the run counts — no rejection-cap override: `FOUNDRY_FUZZ_RUNS=65536 FOUNDRY_INVARIANT_RUNS=4096 forge test` (verified clean).
 
-Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage "^test/" --report summary`; the two 1B-gas ping loops do not survive coverage instrumentation and are excluded from the run, not from the metric's denominator) is complete across `src/`:
+Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage "^test/" --report summary` — the two 1B-gas ping loops do not survive coverage instrumentation and are excluded from the run, not from the metric's denominator) is complete across `src/`:
 
 | File | Lines | Statements | Branches | Functions |
 |---|---|---|---|---|
-| `src/adaptive-curve-irm/AdaptiveCurveIrm.sol` | 100% (75/75) | 100% (80/80) | 100% (24/24) | 100% (12/12) |
+| `src/adaptive-curve-irm/AdaptiveCurveIrm.sol` | 100% (54/54) | 100% (64/64) | 100% (12/12) | 100% (7/7) |
 | `src/adaptive-curve-irm/AdaptiveCurveConfig.sol` | 100% (23/23) | 100% (20/20) | 100% (22/22) | 100% (3/3) |
 | `src/adaptive-curve-irm/libraries/**` (4 files) | 100% (65/65) | 100% (93/93) | 100% (13/13) | 100% (10/10) |
-| `src/fixed-rate-irm/FixedRateIrm.sol` | 100% (14/14) | 100% (11/11) | 100% (10/10) | 100% (3/3) |
-| **Total** | **100% (177/177)** | **100% (204/204)** | **100% (69/69)** | **100% (28/28)** |
-
----
+| `src/common/OwnerManagerBase.sol` | 100% (26/26) | 100% (18/18) | 100% (10/10) | 100% (8/8) |
+| `src/linear-kink-irm/LinearKinkIrm.sol` | 100% (22/22) | 100% (28/28) | 100% (11/11) | 100% (4/4) |
+| **Total** | **100% (190/190)** | **100% (223/223)** | **100% (68/68)** | **100% (32/32)** |
 
 ## 1. Per-market configuration
 
-**What changed.** The curve constants become per-market, validated `AdaptiveCurveConfig` contracts the IRM reads live; the bounds guarantee well-formedness, not economic soundness. See SPECIFICATION §Configuration.
+**What changed.** The curve constants become per-market, validated `AdaptiveCurveConfig` contracts the IRM reads live. The bounds guarantee well-formedness, not economic soundness. See SPECIFICATION §Configuration.
 
 | Verifies | Test |
 |---|---|
@@ -46,39 +46,39 @@ Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage 
 
 ## 2. Authorization (owner and manager)
 
-**What changed.** `setMarketCurveParams` deploys/deduplicates configs inline and is gated to `owner` **or** `manager`; role management is owner-only, both roles set once via `initialize`. See SPECIFICATION §Configuration and §Upgradeable.
+**What changed.** `setMarketCurveParams` deploys/deduplicates configs inline and is gated to `owner` **or** `manager`. Role management is owner-only, both roles set once via `initialize`, with the machinery shared through `OwnerManagerBase` (role errors live in `common/OwnerManagerErrors.sol`). See SPECIFICATION §Configuration and §Upgradeable.
 
 | Verifies | Test |
 |---|---|
 | `setMarketCurveParams` deploys a config from the given params, points the market at it, and the market then prices | `testSetConfigDeploysAndPrices` |
-| Identical params share one config across markets — a dedup hit emits no second `ConfigDeployed` (exactly one log: the bind) and reuses the cached address; different params get their own config | `testSetMarketCurveParamsDeduplicatesConfigs` |
+| Identical params share one config across markets — a dedup hit emits no second `ConfigDeployed` (exactly one log: the bind) and reuses the cached address, while different params get their own config | `testSetMarketCurveParamsDeduplicatesConfigs` |
 | Registry self-consistency: after sets and reparams, every market's config is exactly the cached config for its own params | `testConfigRegistryRoundTrips` |
 | An unauthorized caller (neither owner nor manager) reverts `NOT_AUTHORIZED` | `testSetConfigOnlyOwner` |
 | A manager distinct from the owner can set market curve params but cannot rotate either role | `testManagerRoleSeparation` |
-| The owner rotates ownership in place; the old owner loses the owner-only powers, the new owner gains them | `testTransferOwnership` |
-| `transferOwnership` is owner-only; the zero address is rejected for both roles (neither can be unset) | `testTransferOwnershipOnlyOwner`, `testTransferOwnershipRejectsZero`, `testSetManagerRejectsZero` |
-| The constructor rejects a zero `morpho` and locks the implementation; `initialize` rejects a zero owner, sets both roles once, and rejects a second call | `testDeployment` |
-| `initialize` emits both role events; `transferOwnership`/`setManager` emit theirs with exact fields | `testInitializeEmitsRoleEvents`, `testRoleRotationEmitsEvents` |
+| The owner rotates ownership in place — the old owner loses the owner-only powers, the new owner gains them | `testTransferOwnership` |
+| `transferOwnership` is owner-only, and the zero address is rejected for both roles (neither can be unset) | `testTransferOwnershipOnlyOwner`, `testTransferOwnershipRejectsZero`, `testSetManagerRejectsZero` |
+| The constructor rejects a zero `morpho` and locks the implementation, while `initialize` rejects a zero owner, sets both roles once, and rejects a second call | `testDeployment` |
+| `initialize` emits both role events, and `transferOwnership`/`setManager` emit theirs with exact fields | `testInitializeEmitsRoleEvents`, `testRoleRotationEmitsEvents` |
 
 ## 3. Borrow-rate cap (`maxBorrowRate`)
 
-**What changed.** `returned = min(curveRate, maxBorrowRate)` when the cap is non-zero; it never touches the stored `rateAtTarget`. See SPECIFICATION §Borrow-rate cap.
+**What changed.** An optional hard ceiling on the charged rate: `returned = min(curveRate, maxBorrowRate)` when the cap is non-zero, `0` disables it. It clamps only the value returned to Morpho and never touches the stored `rateAtTarget`. See SPECIFICATION §Borrow-rate cap.
 
 | Verifies | Test |
 |---|---|
 | A cap below the curve's tip clamps the charged rate to `maxBorrowRate` | `testMaxBorrowRateClampsChargedRate` |
-| The cap bounds only the charged rate; `rateAtTarget` adapts exactly as in the uncapped run | `testMaxBorrowRateDoesNotAffectRateAtTarget` |
+| The cap bounds only the charged rate — `rateAtTarget` adapts exactly as in the uncapped run | `testMaxBorrowRateDoesNotAffectRateAtTarget` |
 | Cap behaviour under reparametrization | §4 |
 
 ## 4. Reparametrization (re-pointing)
 
-**What changed.** Re-calling `setMarketCurveParams` re-points a live market; `rateAtTarget` is untouched by the swap and the new params take effect on the next call. See SPECIFICATION §Reparametrization. Every poke in these tests (`_pokeExpecting`) asserts the charged rate and the resulting `rateAtTarget` exactly against the reference under the currently-registered params.
+**What changed.** Re-calling `setMarketCurveParams` re-points a live market. `rateAtTarget` is untouched by the swap and the new params take effect on the next call. See SPECIFICATION §Reparametrization. Every poke in these tests (`_pokeExpecting`) asserts the charged rate and the resulting `rateAtTarget` exactly against the reference under the currently-registered params.
 
 | Verifies | Test |
 |---|---|
 | A new band that still contains the stored rate preserves `rateAtTarget` with no spike | `test_reparam_statePersists_noSpike_whenBoundsContainRate` |
 | A narrowed band snaps the stored rate exactly onto the nearest new bound on the next adapting call | `test_reparam_rateRises_whenNewMinAboveStoredRate`, `test_reparam_rateDrops_whenNewMaxBelowStoredRate` |
-| Widening lets the rate creep (12 hourly steps, each exact per the reference, ceiling not reached); a later narrowing snaps it exactly onto the new ceiling in one step | `test_reparam_widenLetsRateCreep_thenNarrowShocks` |
+| Widening lets the rate creep (12 hourly steps, each exact per the reference, ceiling not reached), and a later narrowing snaps it exactly onto the new ceiling in one step | `test_reparam_widenLetsRateCreep_thenNarrowShocks` |
 | The re-clamp is lazy: after tightening `maxRateAtTarget`, an at-target poke leaves `rateAtTarget` exactly unchanged (out of range, charged as-is) until an off-target call re-bounds it exactly onto the new MAX | `test_reparam_tighterMax_atTargetPokeDefersRebound` |
 | Changing `targetUtilization` / `curveSteepness` reprices the same utilization exactly per the reference with the new params, without moving `rateAtTarget` | `test_reparam_targetShift_changesChargedRate_keepsState`, `test_reparam_steepnessShift_changesChargedRate_keepsState` |
 | A new `adjustmentSpeed` changes future adaptation (both the fast arm and a slow control are exact per the reference) without moving the rate at the swap | `test_reparam_adjustmentSpeedShift_changesFutureAdaptation_keepsState` |
@@ -88,17 +88,17 @@ Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage 
 
 ## 5. Periphery library (`AdaptiveCurveIrmLib`)
 
-**What changed.** The lib resolves the market's config from the IRM and reads it live, applying the same cap; it reverts `CONFIG_NOT_SET` when none is set. See SPECIFICATION §Periphery library.
+**What changed.** The lib resolves the market's config from the IRM and reads it live, applying the same cap, and reverts `CONFIG_NOT_SET` when none is set. See SPECIFICATION §Periphery library.
 
 | Verifies | Test |
 |---|---|
-| The lib's recompute matches the IRM for a given stored `rateAtTarget` and market; balances match `MorphoBalancesLib`, with revert symmetry across the whole uint128 range (accrual overflow included) | `testBorrowRateView`, `testExpectedMarketBalances` |
+| The lib's recompute matches the IRM for a given stored `rateAtTarget` and market, and balances match `MorphoBalancesLib`, with revert symmetry across the whole uint128 range (accrual overflow included) | `testBorrowRateView`, `testExpectedMarketBalances` |
 | The lib's `borrowRateView` matches the contract's own view across the full config space | `testFuzz_borrowRateView_matchesContract_acrossConfigs` |
 | A market with no config registered reverts `CONFIG_NOT_SET` through the lib as well | `testBorrowRateViewRevertsWhenConfigNotSet` |
 
 ## 6. Upgradeable (proxy)
 
-**What changed.** `MORPHO` is implementation bytecode; everything else is proxy storage, and the constructor locks the implementation itself. See SPECIFICATION §Upgradeable. Tests run against a minimal test-only ERC-1967 proxy; where a test seeds `rateAtTarget`, the seed is asserted exactly per the reference.
+**What changed.** `MORPHO` is implementation bytecode, everything else is proxy storage, and the constructor locks the implementation itself. The shared `OwnerManagerBase` fields come first (`owner` slot 0, `manager`+`isInitialized` slot 1), then the IRM's appended fields (`rateAtTarget` slot 2, `marketCurveConfig` slot 3, `deployedCurveConfigs` slot 4). See SPECIFICATION §Upgradeable. Tests run against a minimal test-only ERC-1967 proxy. Where a test seeds `rateAtTarget`, the seed is asserted exactly per the reference.
 
 | Verifies | Test |
 |---|---|
@@ -106,11 +106,11 @@ Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage 
 | Ownership is rotated in place through the proxy (storage write, no upgrade needed) | `test_transferOwnershipThroughProxy` |
 | A logic upgrade preserves `marketCurveConfig[id]` and `rateAtTarget` | `test_upgrade_logicSwap_preservesState` |
 | The dedup cache survives an upgrade: a post-upgrade set of the same params on another market reuses the config deployed before the upgrade | `test_upgrade_preservesDeployedCurveConfigs` |
-| The EIP-1967 impl/admin slots never collide with `rateAtTarget` (slot 0) | `test_proxyImplAndAdminSlots_doNotCollideWithRateAtTarget` |
+| The EIP-1967 impl/admin slots never collide with the `rateAtTarget` mapping | `test_proxyImplAndAdminSlots_doNotCollideWithRateAtTarget` |
 
 ## 7. Formal verification (Certora)
 
-Specs live in `certora/{confs,specs}/`; all rules pass. `ExpectedMarketBalances.conf` maps `lib/morpho-blue`'s core to `solc-0.8.19` via `solc_map` (upstream pins that pragma); the IRM sources compile with `solc-0.8.35`.
+Specs live in `certora/{confs,specs}/`, and all rules pass. `ExpectedMarketBalances.conf` maps `lib/morpho-blue`'s core to `solc-0.8.19` via `solc_map` (upstream pins that pragma), while the IRM sources compile with `solc-0.8.35`.
 
 | Proves | Conf |
 |---|---|
@@ -118,3 +118,18 @@ Specs live in `certora/{confs,specs}/`; all rules pass. `ExpectedMarketBalances.
 | The periphery `expectedMarketBalances` is equivalent to `MorphoBalancesLib`'s (values and reverts) | `ExpectedMarketBalances` |
 | `borrowRate` and `borrowRateView` never return more than `maxBorrowRate` when the cap is enabled (curve and adaptation abstracted to NONDET, so the final clamp is verified non-vacuously) | `MaxBorrowRate` |
 | `borrowRate` keeps `rateAtTarget[id]` within `[minRateAtTarget, maxRateAtTarget]`, under symbolic config satisfying the validation bounds | `RateAtTargetBand` |
+| The fork-only kinked IRM never charges above the setter's peak (`capRespected`) or `MAX_BORROW_RATE` on any reachable storage (`peakCapped` invariant + `rateNeverExceedsMax`), is monotone in utilization (`monotonic`), returns `borrowRate == borrowRateView` (`stateless`), reverts `config not set` when unconfigured (`revertsWhenUnset`), and round-trips the setter's parameters through the view with same-id agreement (`configuredMarketSucceeds`, `setterRoundTrip`) — the scene is the production contract alone, no harness | `LinearKinkIrm` |
+
+## 8. LinearKinkIrm (fork-only)
+
+**What changed.** A new stateless kinked ("jump rate") IRM, not derived from upstream (it replaces the removed `FixedRateIrm`): each market's params (`optimalUtilization`, `baseRate`, `slope1`, `slope2`) live packed in one slot in `mapping(Id => LinearKinkParams)` and are set in place by the `owner`/`manager` via `setMarketKinkParams(marketParams, params)` — validated to `optimalUtilization` strictly inside `(0, WAD)` and peak `baseRate + slope1 + slope2 <= MAX_BORROW_RATE`. The rate is piecewise-linear in utilization, carries no state (`borrowRate == borrowRateView`), and an unconfigured market reverts `CONFIG_NOT_SET`. Authorization and `initialize` come from the same shared `OwnerManagerBase` as the AdaptiveCurveIrm.
+
+| Verifies | Test |
+|---|---|
+| The curve returns `baseRate`, `baseRate + slope1`, and the peak at zero, kink, and full utilization, and is linear on each leg | `test_rateAtZeroUtilizationIsBaseRate`, `test_rateAtKinkIsBasePlusSlope1`, `test_rateAtFullUtilizationIsPeak`, `test_rateIsLinearOnSlope1Leg`, `test_rateIsLinearOnSlope2Leg` |
+| Statelessness, plus fuzzed monotonicity in utilization and the peak bound | `test_borrowRateEqualsBorrowRateView`, `testFuzz_monotonicAndBounded` |
+| Adversarial view inputs: utilization above 100% clamps at the curve's peak, and zero supply prices as zero utilization | `test_overUtilizationClampsAtPeak`, `test_zeroSupplyActsAsZeroUtilization` |
+| Two markets on one IRM keep independent params | `test_marketsAreIndependent` |
+| An unconfigured market reverts `CONFIG_NOT_SET` | `test_revertsWhenParamsNotSet` |
+| Setter validation and authorization | `test_setRevertsOnZeroOptimalUtilization`, `test_setRevertsOnFullOptimalUtilization`, `test_setRevertsWhenPeakRateExceedsMax`, `test_setMarketKinkParams_unauthorizedReverts`, `test_setMarketKinkParams_managerCanSet`, `test_setMarketKinkParams_reparametrizesInPlace` |
+| Shared `OwnerManagerBase` lifecycle (exercised here for both IRMs) | `test_transferOwnership_ownerOnly`, `test_transferOwnership_works`, `test_transferOwnership_rejectsZero`, `test_setManager_ownerOnly`, `test_setManager_works`, `test_initialize_isOneShot`, `test_implementationIsLocked`, `test_initialize_rejectsZeroOwner`, `test_initialize_rejectsZeroManager` |

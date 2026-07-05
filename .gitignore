@@ -23,3 +23,9 @@ node_modules/
 
 # Claude
 .claude/
+.last_confs/
+.certora_metadata.json
+.certora_verify.json
+certora_debug_log.txt
+resource_errors.json
+emv-*/

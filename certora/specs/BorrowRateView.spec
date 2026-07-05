@@ -3,9 +3,9 @@
 using AdaptiveCurveIrm as AdaptiveCurveIrm;
 using AdaptiveCurveIrmLibHarness as AdaptiveCurveIrmLibHarness;
 
-// The periphery lib recomputes the rate from a market id by reading the IRM's registry (`config`), the stored
+// The periphery lib recomputes the rate from a market id by reading the IRM's per-market config mapping (`marketCurveConfig`), the stored
 // `rateAtTarget`, and the market's AdaptiveCurveConfig (`getCurveParams`) -- all via external calls. They are dispatched to the
-// linked IRM so the lib reads the same state the contract reads directly; `getCurveParams()` is summarized to a single
+// linked IRM so the lib reads the same state the contract reads directly. `getCurveParams()` is summarized to a single
 // ghost-backed Params so both sides see identical params (equivalence is about computing the same rate from the same
 // config, not about a particular config value).
 ghost int256 g_curveSteepness;
