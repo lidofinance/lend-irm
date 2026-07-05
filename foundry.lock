@@ -3,7 +3,7 @@
     "rev": "74cfb77e308dd188d2f58864aaf44963ae6b88b1"
   },
   "lib/lido-lend": {
-    "rev": "73e529257298ed0be97daead6d157fdd355c7b41"
+    "rev": "ec7171654bdb7211e07bf696a813f2e7a290a1e2"
   },
   "lib/solmate": {
     "rev": "fadb2e2778adbf01c80275bfb99e5c14969d964b"
