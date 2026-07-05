@@ -66,11 +66,11 @@ contract IrmRouter layout at erc7201("lido.lend.storage.IrmRouter") is IIrmRoute
     // ---
 
     /// @inheritdoc IIrmRouter
-    /// @dev For a new market: configure the implementation, route it here, then `createMarket` -- its `borrowRate`
-    /// ping reverts until then. A live market is accrued first (the old model prices its own period), and the new
-    /// implementation is probed with the exact call Morpho will make -- a reverting one would brick the market.
-    /// Re-attaching a previously used `AdaptiveCurveIrm` resumes from its frozen `rateAtTarget`, not from
-    /// `initialRateAtTarget`.
+    /// @dev A new market is routed without touching the implementation: `createMarket` performs the first
+    /// `borrowRate` ping itself and reverts while the implementation is unconfigured or mis-gated, creating nothing.
+    /// A live market is accrued first (the old model prices its own period) and the new implementation is probed
+    /// with the exact call Morpho will make -- a reverting one would brick the market. Re-attaching a previously
+    /// used `AdaptiveCurveIrm` resumes from its frozen `rateAtTarget`, not from `initialRateAtTarget`.
     function setMarketIrm(MarketParams memory marketParams, IIrm irm) external {
         _checkAuthorized();
         require(address(irm) != address(0), OwnerManagerErrors.ZERO_ADDRESS);
@@ -79,13 +79,16 @@ contract IrmRouter layout at erc7201("lido.lend.storage.IrmRouter") is IIrmRoute
 
         Id id = marketParams.id();
 
+        // Only a live market is accrued and probed: pre-creation there is nothing to accrue, nothing to brick,
+        // and a probe would prematurely write a stateful model's rateAtTarget (createMarket performs the correct
+        // first-interaction ping itself, with lastUpdate freshly stamped).
         Market memory market = IMorpho(MORPHO).market(id);
         if (market.lastUpdate != 0) {
             IMorpho(MORPHO).accrueInterest(marketParams);
             market = IMorpho(MORPHO).market(id);
-        }
 
-        irm.borrowRate(marketParams, market);
+            irm.borrowRate(marketParams, market);
+        }
 
         marketIrm[id] = irm;
         emit MarketIrmSet(id, address(irm));

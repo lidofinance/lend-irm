@@ -27,7 +27,7 @@ Some interest rate models for Morpho Blue, and the router that fronts them:
   - _Lido addition_: a Morpho market can never change its `irm`, so markets are created pointing at this proxied
     router — the one eternal address. It forwards `borrowRate` / `borrowRateView` to a per-market implementation
     (`mapping(Id => IIrm)`) chosen by the router `owner` or `manager` via `setMarketIrm`, letting a live market migrate between rate
-    models. Switching accrues the market first (the old model prices its own period), probes the new implementation
+    models. Switching a live market accrues it first (the old model prices its own period), probes the new implementation
     with the exact call Morpho will make, and never clears the mapping. The router runs behind a proxy (one-shot
     `initialize(owner, manager)`) while the IRMs behind it stay immutable — upgrading routing logic is a proxy upgrade,
     and fixing rate math means a new implementation plus a migration.

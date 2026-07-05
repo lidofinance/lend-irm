@@ -96,7 +96,7 @@ contract IrmRouterProxyTest is Test {
     Id internal id;
 
     /// @dev The test doubles as MORPHO for the routers it deploys: `setMarketIrm` reads `market(id)` from it. An
-    /// all-zero market (lastUpdate == 0) makes the router skip the accrual and go straight to the probe.
+    /// all-zero market (lastUpdate == 0) makes the router route without accruing or probing.
     function market(Id) external pure returns (Market memory m) {}
 
     /// `initialize` works exactly once through the proxy and reverts ALREADY_INITIALIZED after.

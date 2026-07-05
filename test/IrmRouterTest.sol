@@ -215,37 +215,83 @@ contract IrmRouterTest is Test {
 
     /* SET MARKET IRM: PROBE */
 
-    /// The probe rejects an implementation with no config for the market and the switch rolls back.
-    function test_setMarketIrm_probeRevertsWhenConfigNotSet() public {
-        vm.prank(owner);
-        vm.expectRevert(bytes(KinkErrorsLib.CONFIG_NOT_SET));
-        router.setMarketIrm(marketParams, kink);
+    /// Routing a not-yet-created market does not touch the implementation: an unconfigured one routes fine, and
+    /// the failure surfaces at createMarket, which reverts and creates nothing.
+    function test_setMarketIrm_unconfiguredRoutesButCreateMarketReverts() public {
+        _route(kink);
+        assertEq(address(router.marketIrm(id)), address(kink), "routing succeeded without a probe");
 
-        assertEq(address(router.marketIrm(id)), address(0), "switch rolled back");
+        vm.expectRevert(bytes(KinkErrorsLib.CONFIG_NOT_SET));
+        mock.createMarket(marketParams);
+
+        assertEq(mock.market(id).lastUpdate, 0, "nothing was created");
+
+        _configureKink();
+        mock.createMarket(marketParams);
+        assertEq(mock.market(id).lastUpdate, block.timestamp, "created once configured");
     }
 
-    /// The probe catches a mis-constructed ROUTER gate: an AdaptiveCurveIrm built with `ROUTER = mock` (instead of
-    /// the router) rejects the router's probe call.
+    /// A mis-constructed ROUTER gate (an AdaptiveCurveIrm built with `ROUTER = mock` instead of the router) is
+    /// caught by the live-market probe, and pre-creation by createMarket's own ping.
     function test_setMarketIrm_probeCatchesWrongRouterGate() public {
         AdaptiveCurveIrm wrongGate = new AdaptiveCurveIrm(address(mock), owner, manager);
         vm.prank(manager);
         wrongGate.setMarketCurveParams(marketParams, _adaptiveConfig());
 
+        // Pre-creation: routing succeeds (no probe), the createMarket ping catches the wrong gate and creates nothing.
+        _route(wrongGate);
+        vm.expectRevert(bytes(AdaptiveErrorsLib.NOT_ROUTER));
+        mock.createMarket(marketParams);
+        assertEq(mock.market(id).lastUpdate, 0, "nothing was created");
+
+        // Live market: the probe catches the wrong gate at setMarketIrm and the switch rolls back.
+        _configureKink();
+        _route(kink);
+        mock.createMarket(marketParams);
         vm.prank(owner);
         vm.expectRevert(bytes(AdaptiveErrorsLib.NOT_ROUTER));
         router.setMarketIrm(marketParams, wrongGate);
-
-        assertEq(address(router.marketIrm(id)), address(0), "switch rolled back");
+        assertEq(address(router.marketIrm(id)), address(kink), "switch rolled back");
     }
 
-    /// The probe is a real borrowRate call: switching to a configured AdaptiveCurveIrm pre-seeds its rateAtTarget.
-    function test_setMarketIrm_preSeedsAdaptiveRateAtTarget() public {
+    /// Routing pre-creation writes no implementation state, and the launch seed comes from createMarket's ping.
+    /// Attaching a fresh adaptive implementation to a LIVE market seeds it through the probe.
+    function test_setMarketIrm_seedSemantics() public {
         _configureAdaptive(adaptive);
-        assertEq(adaptive.rateAtTarget(id), 0, "no state before the switch");
+        _route(adaptive);
+        assertEq(adaptive.rateAtTarget(id), 0, "pre-creation routing writes no state");
 
+        mock.createMarket(marketParams);
+        assertEq(adaptive.rateAtTarget(id), ConstantsLib.INITIAL_RATE_AT_TARGET, "createMarket's ping seeds the rate");
+
+        AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(router), owner, manager);
+        _configureAdaptive(fresh);
+        _route(fresh);
+        assertEq(fresh.rateAtTarget(id), ConstantsLib.INITIAL_RATE_AT_TARGET, "live-market probe seeds a fresh impl");
+    }
+
+    /// Re-routing before createMarket is idempotent: an uncreated market is never probed, so no implementation
+    /// state exists to decay. Regression: the old pre-creation probe saw the whole epoch as elapsed at zero
+    /// utilization on its second run and crushed rateAtTarget from initialRateAtTarget to minRateAtTarget before
+    /// the market ever launched.
+    function test_setMarketIrm_repeatBeforeCreateMarketKeepsSeededRate() public {
+        _configureAdaptive(adaptive);
+        _configureKink();
+
+        // A duplicate route (script retry) and a kink detour with a route back, all before createMarket.
+        _route(adaptive);
+        _route(adaptive);
+        _route(kink);
         _route(adaptive);
 
-        assertEq(adaptive.rateAtTarget(id), ConstantsLib.INITIAL_RATE_AT_TARGET, "probe pre-seeded rateAtTarget");
+        assertEq(adaptive.rateAtTarget(id), 0, "pre-creation routing never touches the implementation");
+
+        mock.createMarket(marketParams);
+        assertEq(
+            adaptive.rateAtTarget(id),
+            ConstantsLib.INITIAL_RATE_AT_TARGET,
+            "the market launches at initialRateAtTarget, not the floor"
+        );
     }
 
     /// Switching a live market first accrues interest, settling the elapsed period at the OLD model's rate.

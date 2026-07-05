@@ -10,16 +10,36 @@
 // on the contract's own id-derivation path). Where it must talk about the table across all markets, it reads storage
 // directly (`currentContract.marketIrm[id]`). Morpho is not in the scene, so the router's outbound Morpho calls are
 // summarized: `market(id)` returns an unconstrained Market struct and `accrueInterest` is NONDET. The setter's
-// `borrowRate` probe is summarized to NONDET as well -- it is a liveness filter on the implementation, not part of
+// `borrowRate` probe (live markets only) is summarized to NONDET as well -- it is a liveness filter, not part of
 // the routing state -- while the `borrowRateView` forward is dispatched to real scene code, which is exactly what
 // the forwarding rule is about.
 
 using LinearKinkIrm as Kink;
 
-// Unconstrained Market struct standing in for Morpho's `market(id)` view.
+// Ghost observers over the summarized outside world: `ghostLastUpdate` steers what Morpho's `market(id)` reports,
+// and the two counters record every outbound call the router makes into Morpho and the implementation. They exist
+// for the call-occurrence rules (h) and (i) -- the router must not touch the implementation of a not-yet-created
+// market (a pre-creation probe once decayed a stateful model's seeded rate over the whole epoch).
+ghost uint128 ghostLastUpdate;
+ghost mathint accrueCalls;
+ghost mathint probeCalls;
+
+// Market struct standing in for Morpho's `market(id)` view: unconstrained except for `lastUpdate`, which the rules
+// pin through the ghost to choose the created / not-yet-created branch.
 function nondetMarket() returns IrmRouter.Market {
     IrmRouter.Market m;
+    require m.lastUpdate == ghostLastUpdate;
     return m;
+}
+
+function countedAccrue() {
+    accrueCalls = accrueCalls + 1;
+}
+
+function countedBorrowRate() returns uint256 {
+    probeCalls = probeCalls + 1;
+    uint256 rate;
+    return rate;
 }
 
 methods {
@@ -28,14 +48,15 @@ methods {
     function owner() external returns (address) envfree;
     function manager() external returns (address) envfree;
 
-    // Morpho lives outside the scene. Its two calls inside `setMarketIrm` are summarized: `market(id)` returns an
-    // unconstrained Market struct and `accrueInterest` has no effect the router observes.
+    // Morpho lives outside the scene. Its two calls inside `setMarketIrm` are summarized: `market(id)` returns a
+    // ghost-steered Market struct and `accrueInterest` only bumps its call counter.
     function _.market(IrmRouter.Id) external => nondetMarket() expect IrmRouter.Market;
-    function _.accrueInterest(IrmRouter.MarketParams) external => NONDET;
+    function _.accrueInterest(IrmRouter.MarketParams) external => countedAccrue() expect void;
 
-    // The setter's probe and the `borrowRate` forward return an arbitrary rate without reverting or touching state.
-    // The `borrowRateView` forward is dispatched to the scene so `forwardingEquivalence` runs Kink's real code.
-    function _.borrowRate(IrmRouter.MarketParams, IrmRouter.Market) external => NONDET;
+    // The setter's probe (live markets only) and the `borrowRate` forward return an arbitrary rate without
+    // reverting or touching state, and bump the probe counter. The `borrowRateView` forward is dispatched to the
+    // scene so `forwardingEquivalence` runs Kink's real code.
+    function _.borrowRate(IrmRouter.MarketParams, IrmRouter.Market) external => countedBorrowRate() expect uint256;
     function _.borrowRateView(IrmRouter.MarketParams, IrmRouter.Market) external => DISPATCHER(true);
 }
 
@@ -111,4 +132,27 @@ rule forwardingEquivalence(
     uint256 direct = Kink.borrowRateView(e, marketParams, market);
 
     assert routed == direct;
+}
+
+// (h) uncreatedMarketRoutesUntouched: routing a market Morpho reports as not yet created (lastUpdate == 0) makes no
+//     call into Morpho or the implementation -- nothing to accrue, nothing to probe, and no premature write of a
+//     stateful model's per-market state. Regression guard for the pre-creation probe decay.
+rule uncreatedMarketRoutesUntouched(env e, IrmRouter.MarketParams marketParams, address irm) {
+    require ghostLastUpdate == 0;
+    require accrueCalls == 0 && probeCalls == 0;
+
+    setMarketIrm(e, marketParams, irm);
+
+    assert accrueCalls == 0 && probeCalls == 0;
+}
+
+// (i) liveMarketRoutesAccruedAndProbed: a successful switch of a live market (lastUpdate != 0) accrues exactly once
+//     and probes the new implementation exactly once.
+rule liveMarketRoutesAccruedAndProbed(env e, IrmRouter.MarketParams marketParams, address irm) {
+    require ghostLastUpdate != 0;
+    require accrueCalls == 0 && probeCalls == 0;
+
+    setMarketIrm(e, marketParams, irm);
+
+    assert accrueCalls == 1 && probeCalls == 1;
 }
