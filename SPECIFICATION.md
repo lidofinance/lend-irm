@@ -36,7 +36,7 @@ Setting (or changing) a market's curve is a single privileged call:
 | `initialRateAtTarget` (WAD/s) | in `[minRateAtTarget, maxRateAtTarget]` |
 | `minRateAtTarget` (WAD/s) | `> 0` |
 | `maxRateAtTarget` (WAD/s) | in `[minRateAtTarget, ~1e6%/year]` |
-| `maxBorrowRate` (WAD/s) | unvalidated (`0` = disabled) |
+| `maxBorrowRate` (WAD/s) | `0` (disabled) or at most the curve's maximum possible output (max rate-at-target x max steepness, ~1e8%/year) |
 
 These bounds keep the curve math inside its non-overflowing range, so `borrowRate` runs without reverting and returns a non-negative rate. They only guarantee that the market works, not that the curve makes economic sense. The caller can choose any values inside the bounds.
 

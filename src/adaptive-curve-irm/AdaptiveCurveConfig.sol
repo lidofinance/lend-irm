@@ -39,6 +39,12 @@ contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
     /// @dev Maximum rate at target = 10000/year = 1000000%/year (WAD-scaled, per second).
     int256 private constant MAX_RATE_AT_TARGET_LIMIT = 10_000 ether / int256(365 days);
 
+    /// @dev Maximum meaningful borrow-rate cap: the curve's maximum possible output
+    /// (`maxRateAtTarget * curveSteepness` at their ceilings). A cap above it could never bind; rejecting such
+    /// values catches per-second/per-year unit slips that would silently disable the cap.
+    uint256 private constant MAX_BORROW_RATE_LIMIT =
+        uint256(MAX_RATE_AT_TARGET_LIMIT) * uint256(MAX_CURVE_STEEPNESS) / 1e18;
+
     /* CONSTRUCTOR */
 
     /// @notice Validates `curveParams` and freezes it into immutables.
@@ -73,6 +79,11 @@ contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
 
         require(curveParams.initialRateAtTarget >= curveParams.minRateAtTarget, ErrorsLib.INVALID_INITIAL_RATE);
         require(curveParams.initialRateAtTarget <= curveParams.maxRateAtTarget, ErrorsLib.INVALID_INITIAL_RATE);
+
+        require(
+            curveParams.maxBorrowRate == 0 || curveParams.maxBorrowRate <= MAX_BORROW_RATE_LIMIT,
+            ErrorsLib.INVALID_MAX_BORROW_RATE
+        );
     }
 
     /// @inheritdoc IAdaptiveCurveConfig
