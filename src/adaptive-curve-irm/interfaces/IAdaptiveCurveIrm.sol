@@ -9,8 +9,8 @@ import {AdaptiveCurveParams} from "./IAdaptiveCurveTypes.sol";
 
 /// @title IAdaptiveCurveIrm
 /// @author Morpho Labs. Modified by Lido.
-/// @notice Interface exposed by the AdaptiveCurveIrm. One instance serves many markets keyed by `Id`. The
-/// owner/manager surface (including `initialize`) is inherited from `IOwnerManager`.
+/// @notice Interface of the AdaptiveCurveIrm: per-market curve configs, the adapting `rateAtTarget`, and the `IIrm`
+/// pricing surface.
 interface IAdaptiveCurveIrm is IIrm, IOwnerManager {
     /// @notice Emitted when an AdaptiveCurveConfig is deployed for a new `paramsHash` (skipped on a dedup hit).
     event ConfigDeployed(bytes32 indexed paramsHash, address indexed config);
@@ -18,8 +18,8 @@ interface IAdaptiveCurveIrm is IIrm, IOwnerManager {
     /// @notice Emitted when market `id` is pointed at the config holding `curveParams`.
     event MarketCurveParamsSet(Id indexed id, address indexed config, AdaptiveCurveParams curveParams);
 
-    /// @notice Address of Morpho.
-    function MORPHO() external view returns (address);
+    /// @notice The only address whose `borrowRate` calls are accepted: the IrmRouter in front of the IRM.
+    function ROUTER() external view returns (address);
 
     /// @notice Rate at target utilization for market `id`.
     /// @dev Tells the height of the curve.

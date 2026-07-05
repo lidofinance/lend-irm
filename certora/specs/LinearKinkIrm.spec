@@ -84,7 +84,7 @@ rule monotonic(
 }
 
 // (e) revertsWhenUnset: on a contract where no market has been configured (all-zero `marketKinkParams`, e.g. a
-//     freshly initialized proxy), `borrowRateView` reverts for every market (`config not set` —
+//     freshly constructed instance), `borrowRateView` reverts for every market (`config not set` —
 //     `optimalUtilization == 0` is the unset sentinel and the setter makes it unreachable for a configured market).
 rule revertsWhenUnset(env e, LinearKinkIrm.MarketParams marketParams, LinearKinkIrm.Market market) {
     require forall LinearKinkIrm.Id id. currentContract.marketKinkParams[id].optimalUtilization == 0;

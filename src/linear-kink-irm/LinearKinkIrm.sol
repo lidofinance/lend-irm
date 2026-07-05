@@ -13,28 +13,40 @@ import {MathLib, WAD} from "../../lib/morpho-blue/src/libraries/MathLib.sol";
 
 /// @title LinearKinkIrm
 /// @author Lido.
-/// @notice A stateless linear-kink ("jump rate") interest rate model, in the style of Compound (JumpRateModel) and
-/// Euler (LinearKink): the per-second borrow rate is a piecewise-linear function of utilization that steepens past a
-/// kink. One instance serves many markets keyed by `Id`. Each market's parameters live packed in a single storage slot
-/// (4 x uint64) and are set in place by the `owner` or `manager`. The rate carries no state — it depends only on the
-/// market's current utilization — so `borrowRate` and `borrowRateView` are identical.
+/// @notice A stateless kinked IRM: the per-second borrow rate is a piecewise-linear function of utilization that
+/// steepens past the kink. One immutable instance serves many markets, each with its own params set by the `owner`
+/// or `manager`. Meant to sit behind IrmRouter.
 contract LinearKinkIrm is ILinearKinkIrm, OwnerManagerBase {
     using MathLib for uint256;
     using MarketParamsLib for MarketParams;
 
-    /* CONSTANTS */
+    // ---
+    // CONSTANTS
+    // ---
 
     /// @notice Maximum peak rate (baseRate + slope1 + slope2, reached at full utilization) = 800%/year (WAD-scaled,
     /// per second). Also keeps the rate math from overflowing and lets every field fit in `uint64`.
     uint256 public constant MAX_BORROW_RATE = 8.0 ether / uint256(365 days);
 
-    /* STORAGE */
-    // Appended after the OwnerManagerBase storage. The layout is append-only so it is safe behind a proxy.
+    // ---
+    // STORAGE
+    // ---
 
     /// @inheritdoc ILinearKinkIrm
     mapping(Id => LinearKinkParams) public marketKinkParams;
 
-    /* CONFIG MANAGEMENT */
+    // ---
+    // CONSTRUCTOR
+    // ---
+
+    constructor(address owner_, address manager_) {
+        _transferOwnership(owner_);
+        _setManager(manager_);
+    }
+
+    // ---
+    // CONFIG MANAGEMENT
+    // ---
 
     /// @inheritdoc ILinearKinkIrm
     function setMarketKinkParams(MarketParams memory marketParams, LinearKinkParams calldata params) external {
@@ -53,7 +65,9 @@ contract LinearKinkIrm is ILinearKinkIrm, OwnerManagerBase {
         emit MarketKinkParamsSet(id, params);
     }
 
-    /* BORROW RATES */
+    // ---
+    // BORROW RATES
+    // ---
 
     /// @inheritdoc IIrm
     function borrowRateView(MarketParams memory marketParams, Market memory market) external view returns (uint256) {
