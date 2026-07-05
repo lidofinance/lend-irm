@@ -6,8 +6,7 @@ import {WAD} from "../../../lib/lido-lend/src/libraries/MathLib.sol";
 int256 constant WAD_INT = int256(WAD);
 
 /// @title MathLib
-/// @author Morpho Labs
-/// @custom:contact security@morpho.org
+/// @author Morpho Labs. Modified by Lido.
 /// @notice Library to manage fixed-point arithmetic on signed integers.
 library MathLib {
     /// @dev Returns the multiplication of `x` by `y` (in WAD) rounded towards 0.

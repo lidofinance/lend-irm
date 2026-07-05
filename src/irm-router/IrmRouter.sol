@@ -54,7 +54,7 @@ contract IrmRouter layout at erc7201("lido.lend.storage.IrmRouter") is IIrmRoute
 
     /// @inheritdoc IIrmRouter
     function initialize(address owner_, address manager_) external {
-        require(!isInitialized, OwnerManagerErrors.ALREADY_INITIALIZED);
+        require(!isInitialized, ErrorsLib.ALREADY_INITIALIZED);
 
         isInitialized = true;
         _transferOwnership(owner_);
@@ -79,9 +79,8 @@ contract IrmRouter layout at erc7201("lido.lend.storage.IrmRouter") is IIrmRoute
 
         Id id = marketParams.id();
 
-        // Only a live market is accrued and probed: pre-creation there is nothing to accrue, nothing to brick,
-        // and a probe would prematurely write a stateful model's rateAtTarget (createMarket performs the correct
-        // first-interaction ping itself, with lastUpdate freshly stamped).
+        // Only a live market is accrued and probed: a pre-creation probe would prematurely write a stateful
+        // model's rateAtTarget, and a repeated one would then decay it over the whole epoch.
         Market memory market = IMorpho(MORPHO).market(id);
         if (market.lastUpdate != 0) {
             IMorpho(MORPHO).accrueInterest(marketParams);

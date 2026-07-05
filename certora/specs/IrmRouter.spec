@@ -69,6 +69,15 @@ rule unroutedReverts(env e, IrmRouter.MarketParams marketParams, IrmRouter.Marke
     assert lastReverted;
 }
 
+// (a1) unroutedBorrowRateReverts: the state-changing path reverts for an unrouted market too, whoever calls --
+//      Morpho included. Together with (a0) this covers every pricing entry point.
+rule unroutedBorrowRateReverts(env e, IrmRouter.MarketParams marketParams, IrmRouter.Market market) {
+    require forall IrmRouter.Id id. currentContract.marketIrm[id] == 0;
+
+    borrowRate@withrevert(e, marketParams, market);
+    assert lastReverted;
+}
+
 // (a) borrowRateGate: the state-changing entry point is Morpho-only -- any other caller reverts, whatever the market
 //     or the routing state.
 rule borrowRateGate(env e, IrmRouter.MarketParams marketParams, IrmRouter.Market market) {

@@ -1,51 +1,47 @@
 # Lido Lend IRMs
 
-Some interest rate models for Morpho Blue, and the router that fronts them:
+Interest rate models for Lido Lend, and the router that fronts them. A fork of [Morpho Blue IRM](https://github.com/morpho-org/morpho-blue-irm) — the fork point, the per-file footprint, and the full change record live in [FORK_NOTES.md](FORK_NOTES.md).
 
-- [AdaptiveCurveIRM](src/adaptive-curve-irm/AdaptiveCurveIrm.sol)
-  - _Lido fork_: this `AdaptiveCurveIRM` diverges from upstream Morpho's. The curve constants (`ConstantsLib`)
-    move into a per-market, immutable [`AdaptiveCurveConfig`](src/adaptive-curve-irm/AdaptiveCurveConfig.sol) (validated at
-    construction). The IRM's `owner` or `manager` sets a market's curve with a single `setMarketCurveParams` call, which
-    deploys the config — or reuses the one already cached for identical params (deduped by params hash) — and points the
-    market at it. The IRM reads the parameters through an external static call. An optional `maxBorrowRate` hard cap clips
-    the charged rate without touching the adapting `rateAtTarget` (0 disables it). Re-calling `setMarketCurveParams`
-    reparametrizes a live market. The `owner` and `manager` are set at construction (rotated via
-    `transferOwnership` / `setManager`) and the contract is immutable — it sits behind the `IrmRouter`, which is
-    the upgradeable piece, and changing a market's rate logic means routing it to a freshly-deployed implementation.
-  - _Important_: upstream Morpho's `AdaptiveCurveIRM` was deployed [on Ethereum](https://etherscan.io/address/0x870aC11D48B15DB9a138Cf899d20F13F79Ba00BC)
-    without the `via_ir` solc compilation option. That reference predates the changes above, so this contract's
-    bytecode no longer matches that address.
-- [LinearKinkIRM](src/linear-kink-irm/LinearKinkIrm.sol)
-  - _Lido addition_ (replaces upstream's `FixedRateIRM`): a stateless kinked ("jump rate") model à la Aave/Compound —
-    the per-second borrow rate is a piecewise-linear function of utilization that steepens past a kink
-    (`optimalUtilization`). One IRM instance serves many markets keyed by `Id` (like the AdaptiveCurveIRM): each market's
-    parameters (`baseRate`, `slope1`, `slope2`, `optimalUtilization`) are stored packed in a single slot (4×`uint64`,
-    per-second WAD) in a `mapping(Id => LinearKinkParams)`, set and reparametrized in place by the `owner` or `manager`
-    via `setMarketKinkParams(marketParams, params)`. A market with no params set reverts. Same owner/manager model as
-    the AdaptiveCurveIRM — immutable, constructor-set roles, meant to sit behind the router.
-- [IrmRouter](src/irm-router/IrmRouter.sol)
-  - _Lido addition_: a Morpho market can never change its `irm`, so markets are created pointing at this proxied
-    router — the one eternal address. It forwards `borrowRate` / `borrowRateView` to a per-market implementation
-    (`mapping(Id => IIrm)`) chosen by the router `owner` or `manager` via `setMarketIrm`, letting a live market migrate between rate
-    models. Switching a live market accrues it first (the old model prices its own period), probes the new implementation
-    with the exact call Morpho will make, and never clears the mapping. The router runs behind a proxy (one-shot
-    `initialize(owner, manager)`) while the IRMs behind it stay immutable — upgrading routing logic is a proxy upgrade,
-    and fixing rate math means a new implementation plus a migration.
+A Lido Lend market can never change its `irm`, so every market is created pointing at the proxied `IrmRouter` — the one eternal address — which forwards rate queries to a switchable per-market implementation: market → `IrmRouter` → `marketIrm[id]` → `AdaptiveCurveIrm` (reading its market's `AdaptiveCurveConfig`) or `LinearKinkIrm`.
 
-## Resources
+- [IrmRouter](src/irm-router/IrmRouter.sol) — the proxied `IIrm` all markets point at. The router `owner` or `manager` routes each market to an implementation via `setMarketIrm`, so a live market can migrate between rate models. The IRMs behind it are immutable: upgrading routing logic is a proxy upgrade, fixing rate math is a new implementation plus a migration.
+- [AdaptiveCurveIrm](src/adaptive-curve-irm/AdaptiveCurveIrm.sol) — upstream Morpho's adaptive model with the curve math unchanged, but the hardcoded curve constants become per-market parameters, held in immutable [AdaptiveCurveConfig](src/adaptive-curve-irm/AdaptiveCurveConfig.sol) contracts set by the `owner` or `manager`, plus an optional `maxBorrowRate` cap.
+- [LinearKinkIrm](src/linear-kink-irm/LinearKinkIrm.sol) — a stateless kinked ("jump rate") model à la Aave/Compound, replacing upstream's `FixedRateIrm`. One instance serves many markets, each with its own four curve parameters set by the `owner` or `manager`.
 
-- AdaptiveCurveIRM: [documentation](https://docs.morpho.org/concepts/morpho-blue/core-concepts/irm#the-adaptivecurveirm), [announcement article](https://morpho.mirror.xyz/aaUjIF85aIi5RT6-pLhVWBzuiCpOb4BV03OYNts2BHQ).
+The exact semantics — parameter validation, reparametrization, cap behavior, routing and migration rules — are specified in [SPECIFICATION.md](SPECIFICATION.md).
 
-## Audits
-
-All audits are stored in the [audits](audits)' folder.
+Core interfaces and libraries resolve to the [lib/lido-lend](https://github.com/lidofinance/lido-lend) submodule, Lido's fork of Morpho Blue. This repo is in turn imported as a submodule into `lido-lend-markets`, the product repository hosting the market and controller scaffolding: the proxy in front of `IrmRouter` and the deploy scripts live there, not here. Nothing is deployed to production yet.
 
 ## Getting started
 
-Compilation, testing and formatting with [forge](https://book.getfoundry.sh/getting-started/installation).
+Requires [Foundry](https://book.getfoundry.sh/getting-started/installation) — `forge` auto-installs the pinned solc 0.8.35.
 
-Formal verification with [Certora](https://docs.certora.com/): the specs in [certora/specs](certora/specs) cover both IRMs and the router (`certoraRun certora/confs/<Name>.conf`) — see the "Tests and verification" section of [FORK_NOTES.md](FORK_NOTES.md).
+```sh
+git clone --recurse-submodules git@github.com:lidofinance/lido-blue-irm.git
+cd lido-blue-irm
+forge test
+```
+
+Deep fuzz campaigns: `FOUNDRY_FUZZ_RUNS=65536 FOUNDRY_INVARIANT_RUNS=4096 forge test`. The coverage command, the exactness policy, and the property-to-test map are in [TEST_PLAN.md](TEST_PLAN.md).
+
+Formal verification with [Certora](https://docs.certora.com/): `certoraRun certora/confs/<Name>.conf` — the specs cover both IRMs and the router, see the "Tests and verification" section of [FORK_NOTES.md](FORK_NOTES.md). Runs need the Certora CLI, an access key, and `solc-0.8.35` on `PATH`.
+
+## Documentation
+
+- [SPECIFICATION.md](SPECIFICATION.md) — the normative spec of everything this fork adds or changes.
+- [FORK_NOTES.md](FORK_NOTES.md) — fork point, per-file footprint, and the change record against upstream.
+- [TEST_PLAN.md](TEST_PLAN.md) — test inventory, exactness policy, and coverage.
+
+Upstream background — the [Morpho docs](https://docs.morpho.org/concepts/morpho-blue/core-concepts/irm#the-adaptivecurveirm) and the [announcement article](https://morpho.mirror.xyz/aaUjIF85aIi5RT6-pLhVWBzuiCpOb4BV03OYNts2BHQ) describe the constants-based upstream `AdaptiveCurveIRM`, which this fork parameterizes per market.
+
+## Audits
+
+The [audits](audits) folder holds the upstream Morpho audits inherited from the fork point. They cover the forked code — the Lido modifications and additions (per-market configs, `LinearKinkIrm`, `IrmRouter`) have not been audited yet.
+
+## Security
+
+Report vulnerabilities through the [Lido bug bounty on Immunefi](https://immunefi.com/bounty/lido/) — do not open public issues.
 
 ## Licenses
 
-The primary license is MIT, see [LICENSE](LICENSE).
+The Lido Lend IRM sources are MIT, see [LICENSE](LICENSE). The `lido-lend` core interfaces and libraries they import — and compile into the bytecode — are GPL-2.0-or-later.

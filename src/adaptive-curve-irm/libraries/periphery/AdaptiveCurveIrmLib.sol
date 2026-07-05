@@ -14,8 +14,10 @@ import {SharesMathLib} from "../../../../lib/lido-lend/src/libraries/SharesMathL
 import {MathLib as MorphoMathLib} from "../../../../lib/lido-lend/src/libraries/MathLib.sol";
 import {UtilsLib as MorphoUtilsLib} from "../../../../lib/lido-lend/src/libraries/UtilsLib.sol";
 
+/// @title AdaptiveCurveIrmLib
+/// @author Morpho Labs. Modified by Lido.
 /// @dev Library to compute borrowRateView and expectedMarketBalances with only the market id.
-/// @dev Must be used only for markets with an AdaptiveCurveIrm as irm.
+/// @dev Must be used only for markets routed to an AdaptiveCurveIrm (passed as `adaptiveCurveIrm`).
 /// @dev Reverts with `CONFIG_NOT_SET` when the market has no config registered on the IRM.
 library AdaptiveCurveIrmLib {
     using MathLib for int256;
@@ -26,7 +28,7 @@ library AdaptiveCurveIrmLib {
     using MorphoUtilsLib for uint256;
 
     /// @dev Same as the MorphoBalancesLib.expectedMarketBalances function, but takes the market id as input.
-    /// @dev Works only for markets with an AdaptiveCurveIrm as irm.
+    /// @dev Works only for markets routed to an AdaptiveCurveIrm.
     /// @dev Returns the expected totalSupplyAssets, totalSupplyShares, totalBorrowAssets, totalBorrowShares.
     function expectedMarketBalances(address morpho, bytes32 id, address adaptiveCurveIrm)
         internal
@@ -58,7 +60,7 @@ library AdaptiveCurveIrmLib {
     }
 
     /// @dev Same as the AdaptiveCurveIrm.borrowRateView function, but takes the market id as input.
-    /// @dev Works only for markets with an AdaptiveCurveIrm as irm.
+    /// @dev Works only for markets routed to an AdaptiveCurveIrm.
     /// @dev Returns avgRate.
     function borrowRateView(bytes32 id, Market memory market, address adaptiveCurveIrm)
         internal
@@ -76,8 +78,8 @@ library AdaptiveCurveIrmLib {
         view
         returns (uint256, int256)
     {
-        // Curve parameters live in the market's AdaptiveCurveConfig. Resolve it from the IRM and read it through an
-        // external static call, mirroring the IRM. A market with no config set cannot be priced.
+        // Mirrors the IRM: params come live from the market's current config, so the recompute tracks
+        // re-pointing.
         IAdaptiveCurveConfig config = IAdaptiveCurveIrm(adaptiveCurveIrm).marketCurveConfig(id);
         require(address(config) != address(0), ErrorsLib.CONFIG_NOT_SET);
         AdaptiveCurveParams memory p = config.getCurveParams();
@@ -117,7 +119,7 @@ library AdaptiveCurveIrmLib {
         // Safe "unchecked" cast because avgRateAtTarget >= 0.
         uint256 rate = uint256(_curve(avgRateAtTarget, err, p.curveSteepness));
 
-        // Hard cap: clamp the charged rate to maxBorrowRate, leaving endRateAtTarget untouched (mirrors the IRM).
+        // Mirrors the IRM's cap: bounds only the reported rate, `endRateAtTarget` untouched.
         if (p.maxBorrowRate != 0 && rate > p.maxBorrowRate) rate = p.maxBorrowRate;
 
         return (rate, endRateAtTarget);

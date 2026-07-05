@@ -21,7 +21,7 @@ import {MathLib as MorphoMathLib} from "../../lib/lido-lend/src/libraries/MathLi
 /// @author Morpho Labs. Modified by Lido.
 /// @notice One immutable instance serves many markets keyed by `Id`: each market points at an immutable
 /// AdaptiveCurveConfig (deployed and deduplicated here) and keeps its own adapting `rateAtTarget`. The curve and its
-/// adaptation are byte-identical to upstream. Meant to sit behind IrmRouter.
+/// adaptation keep the upstream formulas, parameterized per market. Meant to sit behind IrmRouter.
 contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     using MathLib for int256;
     using UtilsLib for int256;
@@ -79,8 +79,8 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
         Id id = marketParams.id();
         bytes32 curveParamsHash = keccak256(abi.encode(curveParams));
 
-        // Deduplicate: reuse the config already deployed for these exact params, otherwise deploy one (it validates
-        // `curveParams` in its constructor) and cache it. Immutable configs are safely shareable across markets.
+        // The config validates `curveParams` in its constructor. Immutable configs are safely shareable, so
+        // identical params resolve to one deployment.
         IAdaptiveCurveConfig config = deployedCurveConfigs[curveParamsHash];
         if (address(config) == address(0)) {
             config = new AdaptiveCurveConfig(curveParams);
@@ -119,7 +119,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     }
 
     /// @dev Returns avgRate and endRateAtTarget for market `id`.
-    /// @dev Assumes that the inputs `marketParams` and `id` match.
+    /// @dev Assumes `market` is market `id`'s current state.
     function _borrowRate(Id id, Market memory market) private view returns (uint256, int256) {
         IAdaptiveCurveConfig curveConfig = marketCurveConfig[id];
         require(address(curveConfig) != address(0), ErrorsLib.CONFIG_NOT_SET);
@@ -157,7 +157,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
                 avgRateAtTarget = startRateAtTarget;
                 endRateAtTarget = startRateAtTarget;
             } else {
-                // Formula of the average rate that should be returned to Morpho Blue:
+                // Formula of the average rate that should be returned to the core:
                 // avg = 1/T * ∫_0^T curve(startRateAtTarget*exp(speed*x), err) dx
                 // The integral is approximated with the trapezoidal rule:
                 // avg ~= 1/T * Σ_i=1^N [curve(f((i-1) * T/N), err) + curve(f(i * T/N), err)] / 2 * T/N
@@ -179,8 +179,8 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
         // Safe "unchecked" cast because avgRateAtTarget >= 0.
         uint256 rate = uint256(_curve(avgRateAtTarget, err, curveParams.curveSteepness));
 
-        // Hard cap: clamp the charged rate to maxBorrowRate, leaving endRateAtTarget untouched. Adaptation is
-        // err-driven, not rate-driven, so the state machine is unchanged and only the reported rate is bounded.
+        // The cap bounds only the reported rate. Adaptation is err-driven, not rate-driven, so `endRateAtTarget`
+        // stays untouched and the state machine is unchanged.
         if (curveParams.maxBorrowRate != 0 && rate > curveParams.maxBorrowRate) rate = curveParams.maxBorrowRate;
 
         return (rate, endRateAtTarget);

@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import {IrmRouter} from "../src/irm-router/IrmRouter.sol";
 import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
+import {ErrorsLib} from "../src/irm-router/libraries/ErrorsLib.sol";
 import {IIrm} from "../lib/lido-lend/src/interfaces/IIrm.sol";
 import {MarketParamsLib} from "../lib/lido-lend/src/libraries/MarketParamsLib.sol";
 import {Id, MarketParams, Market} from "../lib/lido-lend/src/interfaces/IMorpho.sol";
@@ -109,7 +110,7 @@ contract IrmRouterProxyTest is Test {
         assertEq(IrmRouter(proxy).owner(), owner, "owner set through the proxy");
         assertEq(IrmRouter(proxy).manager(), manager, "manager set through the proxy");
 
-        vm.expectRevert(bytes(OwnerManagerErrors.ALREADY_INITIALIZED));
+        vm.expectRevert(bytes(ErrorsLib.ALREADY_INITIALIZED));
         IrmRouter(proxy).initialize(owner, manager);
     }
 
@@ -149,7 +150,7 @@ contract IrmRouterProxyTest is Test {
         IrmRouter impl = new IrmRouter(address(this));
 
         assertTrue(impl.isInitialized(), "implementation locked at construction");
-        vm.expectRevert(bytes(OwnerManagerErrors.ALREADY_INITIALIZED));
+        vm.expectRevert(bytes(ErrorsLib.ALREADY_INITIALIZED));
         impl.initialize(owner, manager);
     }
 

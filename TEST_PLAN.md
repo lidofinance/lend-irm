@@ -1,6 +1,6 @@
 # Lido Lend IRM — Test Plan
 
-The fork makes additive changes to Morpho's `AdaptiveCurveIrm`: per-market curve parameters (immutable `AdaptiveCurveConfig` contracts, deployed and deduplicated by the IRM itself), an owner/manager authorization model (extracted into the shared `OwnerManagerBase`, with the roles set at construction), an optional borrow-rate cap, reparametrization by re-pointing a market at new parameters, an immutable deployment behind the proxied `IrmRouter` (changing a market's rate logic means re-routing it at the router), and a periphery library that reads params live from the pointed-at config. The curve math and its adaptation are unchanged from upstream. Each section below states what changed and maps every covered property to its test. The rest is inherited Morpho, covered by the retained upstream suite, adapted to the per-market-config model: the IRM is constructed with an owner and manager, a default config from `test/ConstantsLib.sol` is set per market via `setMarketCurveParams`, `testConstants` is dropped (now covered by `AdaptiveCurveConfig` validation), and the `vm.assume` market filters are reworked into `bound`-based squeezing so deep fuzz campaigns pass at Foundry's default rejection cap. The upstream `FixedRateIrm` is removed and replaced by the fork-only `LinearKinkIrm` (§8). The proxied `IrmRouter` is covered in §6 (the proxy) and §9 (the routing). `ExpLib` and `UtilsLib` are unchanged from upstream and keep their upstream suites (`ExpLibTest`, `UtilsLibTest`) as-is.
+The fork makes additive changes to Morpho's `AdaptiveCurveIrm`: per-market curve parameters (immutable `AdaptiveCurveConfig` contracts, deployed and deduplicated by the IRM itself), an owner/manager authorization model (extracted into the shared `OwnerManagerBase`, with the roles set at construction), an optional borrow-rate cap, reparametrization by re-pointing a market at new parameters, an immutable deployment behind the proxied `IrmRouter` (changing a market's rate logic means re-routing it at the router), and a periphery library that reads params live from the pointed-at config. The curve math and its adaptation are unchanged from upstream. Each section below states what changed and maps every covered property to its test. The rest is inherited Morpho, covered by the retained upstream suite, adapted to the per-market-config model: the IRM is constructed with an owner and manager, a default config from `test/ConstantsLib.sol` is set per market via `setMarketCurveParams`, `testConstants` is dropped (now covered by `AdaptiveCurveConfig` validation), and the `vm.assume` market filters are reworked into `bound`-based squeezing so deep fuzz campaigns pass at Foundry's default rejection cap. The upstream `FixedRateIrm` is removed and replaced by the fork-only `LinearKinkIrm` (§8). The proxied `IrmRouter` is covered in §6 (the proxy) and §9 (the routing). `ExpLib` and `UtilsLib` are unchanged from upstream and keep their upstream suites (`ExpLibTest`, `UtilsTest`), adapted only in import paths and one strengthened overflow assertion in `testWExpDoesNotLeadToOverflow`.
 
 | Change | Suites |
 |---|---|
@@ -13,7 +13,7 @@ The fork makes additive changes to Morpho's `AdaptiveCurveIrm`: per-market curve
 | LinearKinkIrm (replaces `FixedRateIrm`) | `LinearKinkIrmTest`, Certora `LinearKinkIrm` |
 | IrmRouter (routing) | `IrmRouterTest`, Certora `IrmRouter` |
 
-**Exactness policy.** Every adaptive-curve check is exact: the suites assert equality against `test/CurveRefHelper.sol` — an independent reference implementation of the curve, adaptation, and cap, parametrized by the market's params — or against closed-form expected values. There are no directional (`Gt`/`Lt`) assertions in the adaptive suites. The two documented exceptions are the domain properties in `ExpLibTest` (`testWExpPositive`/`testWExpNegative`), which have no exact counterpart, and `LinearKinkIrmTest.testFuzz_monotonicAndBounded`, whose monotonicity claim is inherently directional (the kink suite's point checks are closed-form exact). The upstream ping-every-minute scenarios and the stateful invariant are differential: every interaction in them is asserted equal to the reference. The router suites assert exact forwarding equality against the routed implementation.
+**Exactness policy.** The core property checks assert exact equality against `test/CurveRefHelper.sol` — an independent reference implementation of the curve, adaptation, and cap, parametrized by the market's params — or against closed-form expected values, and the router suites assert exact forwarding equality against the routed implementation. The upstream ping-every-minute scenarios are differential with the reference threaded through the loop: every ping is asserted equal to it. The stateful invariant asserts a probe interaction against the reference computed from the currently stored `rateAtTarget` after every fuzzed call — the fuzzed calls themselves are not asserted. The documented exceptions: the inherited upstream tests in `AdaptiveCurveIrmTest` keep their coarse `assertApproxEqRel` sanity bands alongside the exact reference checks, the inherited `ExpLibTest` checks are directional or banded (the `testWExpPositive`/`testWExpNegative` domain properties, `testWExp`'s 1% band against solmate's `wadExp`, `testWExpSmall`, and the upper-bound continuity band), `LinearKinkIrmTest.testFuzz_monotonicAndBounded` is inherently directional, and three `assertGt` guards in `IrmRouterTest` only qualify the setup (a rate adapted, interest accrued) before the property itself is checked exactly.
 
 Run with `forge test`. Deep campaigns need only the run counts — no rejection-cap override: `FOUNDRY_FUZZ_RUNS=65536 FOUNDRY_INVARIANT_RUNS=4096 forge test` (verified clean).
 
@@ -22,12 +22,12 @@ Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage 
 | File | Lines | Statements | Branches | Functions |
 |---|---|---|---|---|
 | `src/adaptive-curve-irm/AdaptiveCurveIrm.sol` | 100% (56/56) | 100% (66/66) | 100% (12/12) | 100% (7/7) |
-| `src/adaptive-curve-irm/AdaptiveCurveConfig.sol` | 100% (23/23) | 100% (20/20) | 100% (22/22) | 100% (3/3) |
+| `src/adaptive-curve-irm/AdaptiveCurveConfig.sol` | 100% (24/24) | 100% (21/21) | 100% (24/24) | 100% (3/3) |
 | `src/adaptive-curve-irm/libraries/**` (4 files) | 100% (65/65) | 100% (93/93) | 100% (13/13) | 100% (10/10) |
 | `src/common/OwnerManagerBase.sol` | 100% (19/19) | 100% (13/13) | 100% (8/8) | 100% (6/6) |
 | `src/irm-router/IrmRouter.sol` | 100% (30/30) | 100% (29/29) | 100% (15/15) | 100% (5/5) |
 | `src/linear-kink-irm/LinearKinkIrm.sol` | 100% (25/25) | 100% (30/30) | 100% (11/11) | 100% (5/5) |
-| **Total** | **100% (218/218)** | **100% (251/251)** | **100% (81/81)** | **100% (36/36)** |
+| **Total** | **100% (219/219)** | **100% (252/252)** | **100% (83/83)** | **100% (36/36)** |
 
 ## 1. Per-market configuration
 
@@ -38,6 +38,7 @@ Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage 
 | The `AdaptiveCurveConfig` constructor rejects each parameter just outside both ends of its range | `AdaptiveCurveConfigTest.testDeploymentRevertsOnInvalidParams` |
 | Every `AdaptiveCurveParams` field round-trips through `getCurveParams()` | `AdaptiveCurveConfigTest.testGetConfigRoundTrips` |
 | The upstream-equivalent default config passes validation and deploys | `AdaptiveCurveConfigTest.testDefaultConfigIsValid` |
+| The cap's boundary: the largest value the curve can ever output deploys, and `0` stays the explicit "disabled" | `AdaptiveCurveConfigTest.testMaxBorrowRateBoundary` |
 | `borrowRate` and `borrowRateView` revert `CONFIG_NOT_SET` for a market with no config set | `AdaptiveCurveIrmTest.testBorrowRateRevertsWhenConfigNotSet` |
 | Across the operating-band config space and the full accepted space up to the validation ceilings, one interaction matches the reference exactly on both paths | `testFuzz_validConfigInvariants`, `testFuzz_fullRangeConfigUpholdsInvariants` |
 | The charged rate and `rateAtTarget` match the config-parametrized reference across the full accepted config space | `testFuzz_curveMatchesConfigParametrizedReference` |
@@ -136,6 +137,7 @@ Specs live in `certora/{confs,specs}/`, and all rules pass. All confs pin `solc-
 | Adversarial view inputs: utilization above 100% clamps at the curve's peak, and zero supply prices as zero utilization | `test_overUtilizationClampsAtPeak`, `test_zeroSupplyActsAsZeroUtilization` |
 | Two markets on one IRM keep independent params | `test_marketsAreIndependent` |
 | An unconfigured market reverts `CONFIG_NOT_SET` | `test_revertsWhenParamsNotSet` |
+| Every params field round-trips through the `marketKinkParams` getter | `test_paramsAreStoredAndReadable` |
 | Setter validation and authorization | `test_setRevertsOnZeroOptimalUtilization`, `test_setRevertsOnFullOptimalUtilization`, `test_setRevertsWhenPeakRateExceedsMax`, `test_setMarketKinkParams_unauthorizedReverts`, `test_setMarketKinkParams_managerCanSet`, `test_setMarketKinkParams_reparametrizesInPlace` |
 | Shared `OwnerManagerBase` lifecycle: role rotation, zero-address rejection for either role at construction (the `initialize` one-shot and impl-lock coverage lives in §6, on the router) | `test_transferOwnership_ownerOnly`, `test_transferOwnership_works`, `test_transferOwnership_rejectsZero`, `test_setManager_ownerOnly`, `test_setManager_works`, `test_constructor_setsRoles`, `test_constructor_rejectsZeroOwner`, `test_constructor_rejectsZeroManager` |
 
@@ -145,7 +147,7 @@ Specs live in `certora/{confs,specs}/`, and all rules pass. All confs pin `solc-
 
 | Verifies | Test |
 |---|---|
-| `borrowRate` / `borrowRateView` return exactly what the routed implementation returns, for both an adaptive and a kink implementation, including the full mock-accrual path | `test_forwarding_routedKinkMatchesDirect`, `test_forwarding_accrueInterestPathUsesKinkRate` |
+| `borrowRate` / `borrowRateView` return exactly what the routed kink implementation returns, including the full mock-accrual path (adaptive forwarding is asserted in the migration scenario below) | `test_forwarding_routedKinkMatchesDirect`, `test_forwarding_accrueInterestPathUsesKinkRate` |
 | `borrowRate` from a non-Morpho caller reverts `NOT_MORPHO`, and an unrouted market reverts `IRM_NOT_SET` on both entry points | `test_borrowRate_nonMorphoCallerReverts`, `test_unroutedMarketReverts` |
 | The manager routes a market alongside the owner, a stranger reverts `NOT_AUTHORIZED`, the zero-address implementation reverts `ZERO_ADDRESS`, and marketParams carrying a foreign `irm` field revert `NOT_ROUTER_MARKET` | `test_setMarketIrm_managerCanRoute`, `test_setMarketIrm_outsiderReverts`, `test_setMarketIrm_zeroIrmReverts`, `test_setMarketIrm_wrongIrmFieldReverts` |
 | An unconfigured or wrong-`ROUTER` implementation reverts a live-market switch through the probe, while pre-creation the same failures surface at `createMarket`, which creates nothing | `test_setMarketIrm_unconfiguredRoutesButCreateMarketReverts`, `test_setMarketIrm_probeCatchesWrongRouterGate` |
