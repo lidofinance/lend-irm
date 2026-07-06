@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 
 // Fork invariant: the adapting state `rateAtTarget[id]` is kept within the market's band
-// [minRateAtTarget, maxRateAtTarget]. Inductive form: if it is in band (or 0, the uninitialized
-// sentinel) before a `borrowRate`, it is in band after.
+// [minRateAtTarget, maxRateAtTarget]. Two rules: the inductive `borrowRate` step -- in band (or 0, the
+// uninitialized sentinel) before implies in band after -- and the setter's eager re-clamp, which restores the
+// inductive hypothesis whenever a reparametrization moves the band.
 //
 // The curve parameters live in a per-market AdaptiveCurveConfig that the IRM reads via an external `getCurveParams()` static
 // call. The spec links an AdaptiveCurveConfig (`Cfg`) and pins it as the config registered for the market via the native
@@ -73,4 +74,24 @@ rule rateAtTargetStaysInBand(env e, AdaptiveCurveIrm.MarketParams marketParams, 
 
     int256 afterVal = Irm.rateAtTarget(id);
     assert afterVal >= cfg.minRateAtTarget && afterVal <= cfg.maxRateAtTarget;
+}
+
+// The setter's eager re-clamp: `setMarketCurveParams` pulls a non-zero stored rateAtTarget into the new band at the
+// swap itself and leaves the 0 sentinel alone (the first interaction seeds it). The well-formedness requires mirror
+// what `_validateCurveParams` guarantees for any params reachable through a config (the hash binds params to a
+// validated deployment, so an invalid cached config is unreachable).
+rule setterClampsRateIntoNewBand(
+    env e,
+    AdaptiveCurveIrm.MarketParams marketParams,
+    AdaptiveCurveIrm.AdaptiveCurveParams newParams
+) {
+    AdaptiveCurveIrm.Id id = Lib.toId(marketParams);
+    int256 before = Irm.rateAtTarget(id);
+    require newParams.minRateAtTarget > 0 && newParams.maxRateAtTarget >= newParams.minRateAtTarget;
+
+    setMarketCurveParams(e, marketParams, newParams);
+
+    int256 afterVal = Irm.rateAtTarget(id);
+    assert before == 0 => afterVal == 0;
+    assert before != 0 => (afterVal >= newParams.minRateAtTarget && afterVal <= newParams.maxRateAtTarget);
 }

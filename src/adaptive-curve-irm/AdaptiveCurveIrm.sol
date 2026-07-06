@@ -89,6 +89,14 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
         }
 
         marketCurveConfig[id] = config;
+
+        // The saved rate must obey the new band immediately — adaptation alone would re-clamp it late or never.
+        // 0 means the market was never priced: the first call seeds it, so it must stay 0.
+        int256 storedRate = rateAtTarget[id];
+        if (storedRate != 0) {
+            rateAtTarget[id] = storedRate.bound(curveParams.minRateAtTarget, curveParams.maxRateAtTarget);
+        }
+
         emit MarketCurveParamsSet(id, address(config), curveParams);
     }
 
