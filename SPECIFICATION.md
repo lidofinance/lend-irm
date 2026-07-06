@@ -1,14 +1,14 @@
 # Lido Lend IRM — Specification
 
-This document specifies the three contracts of this fork: two interest rate models and the router in front of them. [AdaptiveCurveIrm](#adaptivecurveirm) is the upstream Morpho adaptive model plus the Lido additions — per-market configuration, an owner and a manager, reparametrization, and an optional borrow-rate cap. [LinearKinkIrm](#linearkinkirm) is fork-only, with no upstream counterpart: a stateless kinked ("jump rate") model, specified here from scratch. Both IRMs inherit the same owner/manager base (`OwnerManagerBase`) and are immutable standalone contracts with the roles set at construction. They are meant to sit behind [IrmRouter](#irmrouter) — the proxied contract markets are created with, which routes each market to an implementation and lets the router owner migrate a live market between rate models.
+This document specifies the three contracts of this fork: two interest rate models and the router in front of them. [AdaptiveCurveIrm](#adaptivecurveirm) is the upstream Morpho adaptive model plus the Lido additions — per-market configuration, an owner and a manager, reparametrization, and an optional borrow-rate cap. [LinearKinkIrm](#linearkinkirm) is fork-only, with no upstream counterpart: a stateless kinked ("jump rate") model, specified here from scratch. Both IRMs inherit the same owner/manager base (`OwnerManagerBase`) and are immutable standalone contracts with the roles set at construction. They are meant to sit behind [IrmRouter](#irmrouter) — the proxied contract markets are created with, which routes each market to an implementation and lets the router owner or manager migrate a live market between rate models.
 
 ## AdaptiveCurveIrm
 
 ### Overview
 
-`AdaptiveCurveIrm` is the interest rate model (IRM) Morpho Blue calls to set a market's borrow rate. It maps utilization to a per-second rate through a curve whose height, `rateAtTarget`, is the rate charged at target utilization. That height adapts over time to pull utilization back toward the target, with no governance action required.
+`AdaptiveCurveIrm` is the adaptive rate model markets price through (via the `IrmRouter` in front of it). It maps utilization to a per-second rate through a curve whose height, `rateAtTarget`, is the rate charged at target utilization. That height adapts over time to pull utilization back toward the target, with no governance action required.
 
-The curve and its adaptation are the [upstream Morpho model](https://github.com/morpho-org/morpho-blue-irm) (`morpho-org/morpho-blue-irm` @ `2bce6da`, `src/adaptive-curve-irm/AdaptiveCurveIrm.sol`), **unchanged** in this fork. Anything not specified in this document matches that source. Together with the Morpho whitepaper, it is the normative reference for the exact formulas. This document specifies only the additions of the Lido version:
+The curve and its adaptation are the [upstream Morpho model](https://github.com/morpho-org/morpho-blue-irm) (`morpho-org/morpho-blue-irm` @ `a1a87fd`, `src/adaptive-curve-irm/AdaptiveCurveIrm.sol`): the formulas are **unchanged** — the fork parameterizes them per market instead of reading compile-time constants, and clamps the output with the optional cap. Anything not specified in this document matches that source. Together with the Morpho whitepaper, it is the normative reference for the exact formulas. This document specifies only the additions of the Lido version:
 
 - **per-market configuration** — the curve constants become a validated, immutable `AdaptiveCurveConfig` contract. The IRM keeps a per-market pointer to one and reads it through an external static call, so each market can define its own curve.
 - **owner and manager** — two privileged addresses in storage: the `owner` manages authorization (rotates itself and the `manager`), and either the `owner` or the `manager` sets a market's curve via a single `setMarketCurveParams` call that deploys (or reuses) the config internally.
@@ -20,7 +20,7 @@ The `borrowRate` / `borrowRateView` interface is unchanged, so the model is a dr
 
 ### Configuration
 
-Upstream, every market shares one curve, since its parameters are compile-time constants. Lido runs several markets that may each want a different curve, so the fork moves those constants into `AdaptiveCurveConfig` contracts — immutable holders of one curve's parameters, validated at construction — with a per-market pointer on the IRM (`marketCurveConfig[Id]`), read through an external static call (`getCurveParams()`) when pricing. The curve math that consumes them is byte-identical to upstream.
+Upstream, every market shares one curve, since its parameters are compile-time constants. Lido runs several markets that may each want a different curve, so the fork moves those constants into `AdaptiveCurveConfig` contracts — immutable holders of one curve's parameters, validated at construction — with a per-market pointer on the IRM (`marketCurveConfig[Id]`), read through an external static call (`getCurveParams()`) when pricing. The math that consumes them keeps the upstream formulas — parameterized, not modified — and, given equal parameter values, computes the same rates, which the differential tests assert exactly against the `test/CurveRefHelper.sol` reference.
 
 Setting (or changing) a market's curve is a single privileged call:
 
@@ -38,13 +38,13 @@ Setting (or changing) a market's curve is a single privileged call:
 | `maxRateAtTarget` (WAD/s) | in `[minRateAtTarget, ~1e6%/year]` |
 | `maxBorrowRate` (WAD/s) | `0` (disabled) or at most the curve's maximum possible output (max rate-at-target x max steepness, ~1e8%/year) |
 
-These bounds keep the curve math inside its non-overflowing range, so `borrowRate` runs without reverting and returns a non-negative rate. They only guarantee that the market works, not that the curve makes economic sense. The caller can choose any values inside the bounds.
+These bounds keep the curve math inside its non-overflowing range, so `borrowRate` runs without reverting and returns a non-negative rate.
 
 A market with no config set cannot be priced: `borrowRate` / `borrowRateView` revert with `config not set` until the owner or manager has set one. Morpho's `createMarket` itself calls `borrowRate` to initialize the IRM, so a market using this IRM cannot even be created until its curve is set.
 
 ### Reparametrization
 
-Upstream a deployment's curve cannot change. In the fork, the owner or manager reparametrizes a live market by calling `setMarketCurveParams(marketParams, newCurveParams)` again: the IRM deploys (or reuses) the config for the new parameters and re-points the market at it. The market's `rateAtTarget` is untouched by the swap and keeps adapting from where it was. There is no in-place parameter setter — an `AdaptiveCurveConfig` is itself immutable, so changing a curve always means resolving a (new or cached) config and re-pointing.
+Upstream a deployment's curve cannot change. In the fork, the owner or manager reparametrizes a live market by calling `setMarketCurveParams(marketParams, newCurveParams)` again: the IRM deploys (or reuses) the config for the new parameters and re-points the market at it. The swap clamps a non-zero stored `rateAtTarget` into the new `[minRateAtTarget, maxRateAtTarget]` band (a value already inside is untouched) and adaptation continues from there. There is no in-place parameter setter — an `AdaptiveCurveConfig` is itself immutable, so changing a curve always means resolving a (new or cached) config and re-pointing.
 
 The new parameters take effect on the **next** `borrowRate` call, where they can shift the rate:
 
@@ -53,10 +53,10 @@ The new parameters take effect on the **next** `borrowRate` call, where they can
 | `maxBorrowRate` | borrow rate limited to the new cap, `rateAtTarget` untouched | immediate, even at target |
 | `curveSteepness` | new slope: the same `rateAtTarget` and utilization give a different borrow rate | immediate |
 | `targetUtilization` | the error is recomputed for the same utilization, so the rate shifts | immediate |
-| `minRateAtTarget` / `maxRateAtTarget` | the new bound snaps the saved `rateAtTarget` into the new range | lazy (see below) |
+| `minRateAtTarget` / `maxRateAtTarget` | prices from the `rateAtTarget` already clamped into the new range at the swap | immediate, even at target |
 | `adjustmentSpeed` | changes the speed of future adaptation | gradual |
 
-Only a change to the `minRateAtTarget` / `maxRateAtTarget` bounds can move the stored `rateAtTarget` discontinuously. When the new range still contains the stored value (for instance, a widened range), adaptation continues from where it was, with no jump. When the range is **narrowed** below the current value, the next adapting call snaps `rateAtTarget` to the nearest new bound in one step. The size of that jump is the gap between the old value and the new bound, which the caller sets by choosing the bound.
+Only a change to the `minRateAtTarget` / `maxRateAtTarget` bounds can move the stored `rateAtTarget` discontinuously. When the new range still contains the stored value (for instance, a widened range), adaptation continues from where it was, with no jump. When the range is **narrowed** past the stored value, the setter clamps `rateAtTarget` onto the nearest new bound at the swap itself. The size of that jump is the gap between the old value and the new bound, which the caller sets by choosing the bound.
 
 The graph illustrates both: a new range that still contains the stored `rateAtTarget` (smooth), and a new `maxRateAtTarget` below it (snap down).
 
@@ -64,7 +64,7 @@ The graph illustrates both: a new range that still contains the stored `rateAtTa
 
 Two more things to know about a reparametrization:
 
-* **The re-clamp is lazy.** `rateAtTarget` is re-clamped into the new range only on a call where utilization is off target **and** time has elapsed. Pointing a market at a tighter range followed by an at-target (or same-block) call leaves `rateAtTarget` out of range, used unchanged, until a later off-target call snaps it in. `maxBorrowRate` is the only bound that applies immediately in that interval.
+* **The re-clamp is eager.** The setter clamps a non-zero stored `rateAtTarget` into the new range at the swap, so a narrowed band takes effect on the very next call — even at target utilization, in the same block, or with `adjustmentSpeed` 0. A stored rate of 0 (a market this instance has never priced) is left alone, and the first interaction still seeds `initialRateAtTarget`.
 * **The new parameters apply to the whole period since the last update.** The first `borrowRate` after a swap averages over the entire interval since `market.lastUpdate`, which may precede the swap — old and new parameters are not blended at the swap timestamp. To settle the pre-reparametrization interval at the old parameters, call `accrueInterest` immediately before swapping.
 
 ### Deployment and authorization
@@ -86,7 +86,7 @@ Upstream puts no ceiling on the charged rate. Above target the curve multiplies 
 returned = min( curveRate,  maxBorrowRate )      # only when maxBorrowRate != 0
 ```
 
-The cap only clamps the returned value and never touches the stored `rateAtTarget`. Adaptation responds to the utilization error rather than the current rate, so clamping `rateAtTarget` would interfere with the control loop, while clamping the output leaves it running exactly as upstream. The state machine behaves the same whether the cap is on or off, and raising or removing the cap (by re-pointing the market at a new config) brings the borrow rate straight back to the curve value on the next call.
+The cap only clamps the returned value and never touches the stored `rateAtTarget`. Adaptation responds to the utilization error rather than the current rate, so clamping `rateAtTarget` would interfere with the control loop, while clamping the output leaves it running exactly as upstream. The state machine behaves the same whether the cap is on or off, and raising or removing the cap (by re-pointing the market at a new config) brings the borrow rate straight to `min(curve value, new cap)` on the next call.
 
 The cap clips the high-utilization peak of the curve, or the whole curve if it sits below `rateAtTarget`. Setting `maxBorrowRate` to 0 turns it off. A cap below the curve's operating range makes the market effectively interest-free — that is what the chosen value does, and avoiding it is on the caller, not a contract defect.
 
@@ -96,7 +96,7 @@ With an `8%/year` cap on the same curve, the charged rate follows the curve, the
 
 ### Periphery library
 
-`AdaptiveCurveIrmLib` recomputes `borrowRateView` and `expectedMarketBalances` from a market `Id` alone, for integrators that hold the id rather than the full `MarketParams`. Because each market's curve is read from its own `AdaptiveCurveConfig` (which the owner/manager can re-point), it differs from upstream in two ways:
+`AdaptiveCurveIrmLib` recomputes `borrowRateView` and `expectedMarketBalances` from a market `Id` alone, for integrators that hold the id rather than the full `MarketParams`. Because each market's curve is read from its own `AdaptiveCurveConfig` (which the owner/manager can re-point), it differs from upstream in two ways, and the equivalence is machine-checked:
 
 - it resolves the market's config from the IRM (`marketCurveConfig(id)`) and reads it **live from that `AdaptiveCurveConfig`** (via `getCurveParams()`), tracking whichever config the market currently points at, and applies the same cap, reverting with `config not set` when none is set (mirroring the IRM).
 - its results are **market-specific**, per the current `AdaptiveCurveConfig`, and must be queried with the market's actual `AdaptiveCurveIrm` address and `Id`.
@@ -106,7 +106,7 @@ With an `8%/year` cap on the same curve, the charged rate follows the curve, the
 
 This section states what each actor can do to the model. Who holds each, and through what process it acts, is a governance matter outside this spec.
 
-**IRM owner** (governance) holds authorization and the curve: it rotates itself (`transferOwnership`) and the manager (`setManager`), and can set or re-point any market's curve (`setMarketCurveParams`), swapping its entire curve — and with it every future rate the market reads — in a single transaction, with `rateAtTarget` carrying across the swap. The owner is trusted to choose well-formed parameters (the config constructor's validation ensures `borrowRate` neither reverts nor returns a negative rate) and to judge whether a curve is economically sound and `maxBorrowRate` set sensibly. The model never custodies funds, so this is power over the rate Morpho reads, not over deposits.
+**IRM owner** (governance) holds authorization and the curve: it rotates itself (`transferOwnership`) and the manager (`setManager`), and can set or re-point any market's curve (`setMarketCurveParams`), swapping its entire curve — and with it every future rate the market reads — in a single transaction, with `rateAtTarget` carried across the swap, clamped into the new band. The owner is trusted to choose well-formed parameters (the config constructor's validation ensures `borrowRate` neither reverts nor returns a negative rate) and to judge whether a curve is economically sound and `maxBorrowRate` set sensibly. The model never custodies funds, so this is power over the rate Morpho reads, not over deposits.
 
 **IRM manager** (operations) is scoped: it may call `setMarketCurveParams` — set or reparametrize any market's curve — but cannot change `owner` or `manager` (`transferOwnership`/`setManager` are owner-only). It exists so day-to-day curve tuning need not use the owner key. Its power over rates is the same as the owner's — it simply cannot change authorization.
 
@@ -116,7 +116,7 @@ This section states what each actor can do to the model. Who holds each, and thr
 
 ### References
 
-- Upstream IRM source at `morpho-org/morpho-blue-irm` @ `2bce6da` and the Morpho whitepaper — normative for the curve and its adaptation.
+- Upstream IRM source at `morpho-org/morpho-blue-irm` @ `a1a87fd` and the Morpho whitepaper — normative for the curve and its adaptation.
 - `FORK_NOTES.md` — the fork point and the full per-file delta against upstream.
 - `src/common/OwnerManagerBase.sol` (with `IOwnerManager.sol` and `OwnerManagerErrors.sol`) — the two-role base all three contracts inherit, with the roles set from the inheriting constructor (or, for the router, via its own `initialize`) — normative for the authorization semantics this document describes.
 - `src/irm-router/IrmRouter.sol` — the proxied router this IRM sits behind, specified in the IrmRouter part below.
@@ -170,20 +170,20 @@ The deployment stance is the shared one specified in the AdaptiveCurveIrm part a
 
 The **owner** and **manager** hold the same power as in the adaptive model, in a more immediate form: `setMarketKinkParams` moves a market's rate discontinuously on the next call — bounded by `MAX_BORROW_RATE` — with no adapting state to smooth the change. As in the adaptive model there is no proxy admin and no upgrade path — replacing the logic means a new implementation routed in at the `IrmRouter`. The model never custodies funds.
 
-Unlike the adaptive IRM, `borrowRate` is not Morpho-gated: there is no state to protect, so it is a read, callable by anyone, and Morpho's accrual simply reads it through the `IIrm` interface. The contract depends on no external contract at all — the market state is passed in by value and the parameters live in its own storage.
+Unlike the adaptive IRM, `borrowRate` is ungated: there is no state to protect, so it is a read, callable by anyone, and the router simply forwards to it. The contract depends on no external contract at all — the market state is passed in by value and the parameters live in its own storage.
 
 ### References
 
 - `src/linear-kink-irm/interfaces/ILinearKinkIrm.sol` — the typed contract surface: `marketKinkParams(Id)`, `setMarketKinkParams`, `MAX_BORROW_RATE`, and the inherited `IIrm`/`IOwnerManager` interfaces.
 - `src/linear-kink-irm/interfaces/ILinearKinkTypes.sol` — the packed `LinearKinkParams` struct.
 - Compound's `JumpRateModel`, Euler's `IRMLinearKink`, Aave's `DefaultReserveInterestRateStrategy` — the model family — this contract is a from-scratch implementation, not a port of any of them.
-- `TEST_PLAN.md` (§7) and `certora/specs/LinearKinkIrm.spec` — the test and formal-verification coverage of the properties above.
+- `TEST_PLAN.md` (§8) and `certora/specs/LinearKinkIrm.spec` — the test and formal-verification coverage of the properties above.
 
 ## IrmRouter
 
 ### Overview
 
-A Morpho market can never change its `irm`, so markets are created pointing at `IrmRouter` — the fork's one eternal address. It implements the `IIrm` surface and forwards `borrowRate` / `borrowRateView` to a per-market implementation — `AdaptiveCurveIrm`, `LinearKinkIrm`, or any future `IIrm` — chosen by the router `owner`. That indirection is what upgradeability means in this fork: the market keeps pricing through the same address while the rate model behind it can be switched, so a live market can migrate between models.
+A Morpho market can never change its `irm`, so markets are created pointing at `IrmRouter` — the fork's one eternal address. It implements the `IIrm` surface and forwards `borrowRate` / `borrowRateView` to a per-market implementation — `AdaptiveCurveIrm`, `LinearKinkIrm`, or any future `IIrm` — chosen by the router `owner` or `manager`. That indirection is what upgradeability means in this fork: the market keeps pricing through the same address while the rate model behind it can be switched, so a live market can migrate between models.
 
 Implementations are standalone immutable contracts, called with a plain CALL (no delegatecall). Each holds its own per-market state and parameters, and a state-changing implementation must be constructed with its `ROUTER` immutable set to the router address so it accepts the router's calls (the stateless `LinearKinkIrm` has no such gate). `borrowRate` is Morpho-only (`not Morpho` otherwise) and `borrowRateView` is public, and both revert `irm not set` for a market that has not been routed. The mapping `marketIrm[Id]` can be re-pointed but never cleared (`setMarketIrm` rejects the zero address), so a market once routed always prices.
 
@@ -228,5 +228,5 @@ Changing the routing logic is a **proxy upgrade** to a freshly-constructed imple
 
 - `src/irm-router/IrmRouter.sol` — the contract this part specifies.
 - `src/irm-router/interfaces/IIrmRouter.sol` — the typed contract surface: `MORPHO()`, `marketIrm(Id)`, `setMarketIrm` (with the `MarketIrmSet` event), `isInitialized()`/`initialize`, and the inherited `IIrm` and `IOwnerManager` interfaces.
-- `src/irm-router/libraries/ErrorsLib.sol` — the router's errors (`not Morpho`, `irm not set`, `irm is not this router`).
-- `TEST_PLAN.md` (§§6, 8) and `certora/specs/IrmRouter.spec` — the test and formal-verification coverage of the properties above.
+- `src/irm-router/libraries/ErrorsLib.sol` — the router's errors (`already initialized`, `not Morpho`, `irm not set`, `irm is not this router`).
+- `TEST_PLAN.md` (§§6, 9) and `certora/specs/IrmRouter.spec` — the test and formal-verification coverage of the properties above.

@@ -41,7 +41,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     }
 
     /* ============================== MORPHO UPSTREAM TESTS ============================== */
-    /* Inherited from morpho-org/morpho-blue-irm @ 2bce6da, adapted to the AdaptiveCurveConfig constructor. */
+    /* Inherited from morpho-org/morpho-blue-irm @ a1a87fd, adapted to the AdaptiveCurveConfig constructor. */
 
     function testDeployment() public {
         // The constructor rejects a zero router, owner, or manager.

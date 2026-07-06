@@ -5,6 +5,9 @@ pragma solidity ^0.8.0;
 /// @author Lido.
 /// @notice Errors of the IrmRouter.
 library ErrorsLib {
+    /// @notice Thrown when `initialize` is called after the contract is already initialized.
+    string internal constant ALREADY_INITIALIZED = "already initialized";
+
     /// @notice Thrown when `borrowRate` is called by an address other than Morpho.
     string internal constant NOT_MORPHO = "not Morpho";
 

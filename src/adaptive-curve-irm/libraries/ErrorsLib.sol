@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 /// @title ErrorsLib
 /// @author Morpho Labs. Modified by Lido.
-/// @notice Library exposing error messages. Role/init errors live in OwnerManagerBase.
+/// @notice Library exposing error messages.
 library ErrorsLib {
     /// @dev Thrown when the caller is not the router.
     string internal constant NOT_ROUTER = "not router";

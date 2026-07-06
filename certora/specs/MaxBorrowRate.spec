@@ -38,7 +38,7 @@ rule borrowRateViewRespectsCap(env e, AdaptiveCurveIrm.MarketParams marketParams
     assert rate <= cfg.maxBorrowRate;
 }
 
-// The state-changing `borrowRate` (Morpho only) likewise never returns more than the cap.
+// The state-changing `borrowRate` (router only) likewise never returns more than the cap.
 rule borrowRateRespectsCap(env e, AdaptiveCurveIrm.MarketParams marketParams, AdaptiveCurveIrm.Market market) {
     AdaptiveCurveIrm.Id id = Lib.toId(marketParams);
     require Irm.marketCurveConfig(id) == Cfg;

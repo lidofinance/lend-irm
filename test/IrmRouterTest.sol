@@ -254,6 +254,20 @@ contract IrmRouterTest is Test {
         assertEq(address(router.marketIrm(id)), address(kink), "switch rolled back");
     }
 
+    /// An implementation with no config for the market is caught by the live-market probe, and the switch rolls
+    /// back.
+    function test_setMarketIrm_probeCatchesUnconfiguredImpl() public {
+        _configureKink();
+        _route(kink);
+        mock.createMarket(marketParams);
+
+        // `adaptive` has no config for this market: the probe reverts and the route stays on the kink model.
+        vm.prank(owner);
+        vm.expectRevert(bytes(AdaptiveErrorsLib.CONFIG_NOT_SET));
+        router.setMarketIrm(marketParams, adaptive);
+        assertEq(address(router.marketIrm(id)), address(kink), "switch rolled back");
+    }
+
     /// Routing pre-creation writes no implementation state, and the launch seed comes from createMarket's ping.
     /// Attaching a fresh adaptive implementation to a LIVE market seeds it through the probe.
     function test_setMarketIrm_seedSemantics() public {

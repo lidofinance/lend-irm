@@ -11,10 +11,9 @@ import "../lib/forge-std/src/Test.sol";
 import {CurveRefHelper} from "./CurveRefHelper.sol";
 
 /// Reparametrization in the per-market-config model: re-registering a new AdaptiveCurveConfig under the SAME id swaps
-/// the market's curve. The dynamics (snap on the next adapting call, lazy re-clamp, whole-interval repricing) are
-/// emergent
-/// from reading whichever config is currently registered + the unchanged curve math + the persisted rateAtTarget — no
-/// proxy involved. Variant A allows the re-registration these tests exercise.
+/// the market's curve, and the setter clamps a non-zero stored rateAtTarget into the new band at the swap. Everything
+/// else is emergent from reading whichever config is currently registered + the unchanged curve math + the persisted
+/// rateAtTarget — no proxy involved. Variant A allows the re-registration these tests exercise.
 contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
     using MarketParamsLib for MarketParams;
 
@@ -40,7 +39,7 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         assertEq(_borrowAtTarget(), borrowBefore, "no spike: borrow continues from the persisted rate");
     }
 
-    /// A new MIN above the stored rate snaps rateAtTarget up on the next adapting call.
+    /// A new MIN above the stored rate pulls rateAtTarget up onto it at the swap itself.
     function test_reparam_rateRises_whenNewMinAboveStoredRate() public {
         _wired(_config(int256(0.025 ether) / Y, int256(0.005 ether) / Y, int256(0.08 ether) / Y));
         _adaptDown();
@@ -50,15 +49,13 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         AdaptiveCurveParams memory newConfig = _config(newMinRate, newMinRate, newMinRate * 4);
         _reparam(newConfig);
 
-        assertEq(_rateAtTarget(), rateBefore, "stored rate unchanged until the next adapting call");
+        assertEq(_rateAtTarget(), newMinRate, "the swap clamps the stored rate up onto the new MIN");
 
-        // The 5-day above-target drift alone grows the rate by only ~e^0.137, so the new MIN (1.5x) binds:
-        // the spike lands exactly on it.
-        int256 rateAfter = _pokeExpecting(newConfig, 0.95 ether);
-        assertEq(rateAfter, newMinRate, "the up-snap lands exactly on the new MIN");
+        // The next call adapts from the clamped value, exactly per the reference.
+        _pokeExpecting(newConfig, 0.95 ether);
     }
 
-    /// A new MAX below the stored rate snaps rateAtTarget down on the next adapting call.
+    /// A new MAX below the stored rate pulls rateAtTarget down onto it at the swap itself.
     function test_reparam_rateDrops_whenNewMaxBelowStoredRate() public {
         _wired(_config(int256(0.025 ether) / Y, int256(0.005 ether) / Y, int256(0.08 ether) / Y));
         _adaptDown();
@@ -68,11 +65,10 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         AdaptiveCurveParams memory newConfig = _config(newMaxRate, rateBefore / 4, newMaxRate);
         _reparam(newConfig);
 
-        assertEq(_rateAtTarget(), rateBefore, "stored rate unchanged until the next adapting call");
+        assertEq(_rateAtTarget(), newMaxRate, "the swap clamps the stored rate down onto the new MAX");
 
-        // The above-target poke drifts the rate UP, so the new MAX (2/3x) binds: the drop lands exactly on it.
-        int256 rateAfter = _pokeExpecting(newConfig, 0.95 ether);
-        assertEq(rateAfter, newMaxRate, "the down-snap lands exactly on the new MAX");
+        // The next call adapts from the clamped value, exactly per the reference.
+        _pokeExpecting(newConfig, 0.95 ether);
     }
 
     /// The cap applies after registration and a tighter cap takes effect on the next call.
@@ -125,8 +121,8 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         assertEq(_rateAtTarget(), rateBefore, "the cap did not touch rateAtTarget");
     }
 
-    /// After tightening MAX, an at-target poke leaves rateAtTarget out of range until a later off-target call.
-    function test_reparam_tighterMax_atTargetPokeDefersRebound() public {
+    /// Tightening MAX takes effect at the swap: even an at-target call charges the clamped rate right away.
+    function test_reparam_tighterMax_appliesImmediately_evenAtTarget() public {
         _wired(_config(int256(0.02 ether) / Y, int256(0.005 ether) / Y, int256(0.2 ether) / Y));
         _adaptUp();
 
@@ -135,24 +131,21 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         AdaptiveCurveParams memory newConfig = _config(newMaxRate, int256(0.005 ether) / Y, newMaxRate);
         _reparam(newConfig);
 
-        // The at-target poke (err == 0) leaves the stored rate EXACTLY where it was — still above the new MAX
-        // (it equals 2 * newMaxRate): the rebound is deferred.
+        assertEq(_rateAtTarget(), newMaxRate, "the swap clamps the stored rate onto the new MAX");
+
+        // The at-target poke (err == 0) adapts nothing and charges the clamped rate: there is no window where the
+        // stale above-MAX rate is charged.
         _pokeExpecting(newConfig, TARGET);
-        assertEq(_rateAtTarget(), rateBefore, "at-target poke leaves the stored rate unbounded");
+        assertEq(_rateAtTarget(), newMaxRate, "at-target poke keeps the clamped rate");
         assertEq(
             irm.borrowRateView(params, _market(TARGET)),
-            uint256(rateBefore),
-            "uncapped: the stale above-MAX rate is charged as-is"
+            uint256(newMaxRate),
+            "the clamped rate is what gets charged at target"
         );
-
-        // The off-target poke's own downward drift (~e^-0.18) does not reach MAX/2, so the clamp binds: the
-        // re-bound lands exactly on the new MAX.
-        _pokeExpecting(newConfig, 0.3 ether);
-        assertEq(_rateAtTarget(), newMaxRate, "off-target poke re-bounds exactly onto the new MAX");
     }
 
-    /// Widening lets rateAtTarget creep up; a later narrowing snaps it onto the new ceiling in one step.
-    function test_reparam_widenLetsRateCreep_thenNarrowShocks() public {
+    /// Widening lets rateAtTarget creep up; a later narrowing clamps it onto the new ceiling at the swap.
+    function test_reparam_widenLetsRateCreep_thenNarrowClampsAtSwap() public {
         int256 initialMinRate = int256(0.005 ether) / Y;
         int256 initialMaxRate = int256(0.05 ether) / Y;
 
@@ -174,14 +167,29 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         assertTrue(crept != wideMaxRate, "creep stays below the widened ceiling (creep, not snap)");
 
         // Narrow the ceiling below the crept rate (it sits above tightMax by construction: it crept up from
-        // initialMaxRate == 0.05/yr > 0.03/yr): unchanged until the next adapting call, then snapped in one step.
+        // initialMaxRate == 0.05/yr > 0.03/yr): the swap clamps it onto the new ceiling immediately.
         int256 tightMaxRate = int256(0.03 ether) / Y;
         AdaptiveCurveParams memory tightConfig = _config(tightMaxRate, initialMinRate, tightMaxRate);
         _reparam(tightConfig);
-        assertEq(_rateAtTarget(), crept, "narrow alone leaves the crept rate unchanged");
+        assertEq(_rateAtTarget(), tightMaxRate, "the narrowing swap clamps the crept rate onto the new ceiling");
 
+        // Subsequent adaptation proceeds from the clamped value, exactly per the reference.
         _pokeExpecting(tightConfig, 0.98 ether, 1 hours);
-        assertEq(_rateAtTarget(), tightMaxRate, "shock: snapped exactly onto the new tight ceiling in one step");
+    }
+
+    /// A market this instance has never priced is not clamped: the sentinel 0 survives the swap and the first
+    /// interaction still seeds the current config's initialRateAtTarget.
+    function test_reparam_freshMarketKeepsSentinel_thenSeedsInitialRate() public {
+        _wired(_config(int256(0.04 ether) / Y, int256(0.005 ether) / Y, int256(0.2 ether) / Y));
+        assertEq(_rateAtTarget(), 0, "no clamp for a never-priced market");
+
+        AdaptiveCurveParams memory newConfig =
+            _config(int256(0.03 ether) / Y, int256(0.01 ether) / Y, int256(0.1 ether) / Y);
+        _reparam(newConfig);
+        assertEq(_rateAtTarget(), 0, "re-setting params before any pricing keeps the sentinel");
+
+        _pokeExpecting(newConfig, TARGET);
+        assertEq(_rateAtTarget(), newConfig.initialRateAtTarget, "first interaction seeds the current initial rate");
     }
 
     /// Changing targetUtilization shifts the charged rate at the same utilization, without moving rateAtTarget.

@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 /// @title ErrorsLib
 /// @author Lido.
-/// @notice Library exposing error messages for the linear-kink IRM. Role/init errors live in OwnerManagerBase.
+/// @notice Library exposing error messages for the linear-kink IRM.
 library ErrorsLib {
     /// @dev Thrown when a borrow rate is requested for a market that has no params set.
     string internal constant CONFIG_NOT_SET = "config not set";

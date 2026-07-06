@@ -52,7 +52,6 @@ contract LinearKinkIrm is ILinearKinkIrm, OwnerManagerBase {
     function setMarketKinkParams(MarketParams memory marketParams, LinearKinkParams calldata params) external {
         _checkAuthorized();
 
-        // Well-formedness only: the kink sits strictly inside (0, WAD) and the peak rate is capped at MAX_BORROW_RATE.
         require(params.optimalUtilization > 0, ErrorsLib.INVALID_OPTIMAL_UTILIZATION);
         require(params.optimalUtilization < WAD, ErrorsLib.INVALID_OPTIMAL_UTILIZATION);
         require(
@@ -80,12 +79,12 @@ contract LinearKinkIrm is ILinearKinkIrm, OwnerManagerBase {
         return _borrowRate(marketParams.id(), market);
     }
 
-    /// @dev Computes the linear-kink per-second borrow rate for market `id` from its current utilization. The curve is
-    /// piecewise-linear in utilization `U`:
+    /// @dev Computes the linear-kink per-second borrow rate for market `id` from its current utilization. The curve
+    /// is piecewise-linear in utilization `U`:
     ///   U <= optimalUtilization: baseRate + slope1 * U / optimalUtilization
     ///   U >  optimalUtilization: baseRate + slope1 + slope2 * (U - optimalUtilization) / (WAD - optimalUtilization)
     function _borrowRate(Id id, Market memory market) private view returns (uint256) {
-        LinearKinkParams memory p = marketKinkParams[id]; // one SLOAD (all four fields share a slot)
+        LinearKinkParams memory p = marketKinkParams[id];
         require(p.optimalUtilization != 0, ErrorsLib.CONFIG_NOT_SET);
 
         uint256 utilization =
