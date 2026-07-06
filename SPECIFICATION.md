@@ -44,7 +44,7 @@ A market with no config set cannot be priced: `borrowRate` / `borrowRateView` re
 
 ### Reparametrization
 
-Upstream a deployment's curve cannot change. In the fork, the owner or manager reparametrizes a live market by calling `setMarketCurveParams(marketParams, newCurveParams)` again: the IRM deploys (or reuses) the config for the new parameters and re-points the market at it. The market's `rateAtTarget` is untouched by the swap and keeps adapting from where it was. There is no in-place parameter setter — an `AdaptiveCurveConfig` is itself immutable, so changing a curve always means resolving a (new or cached) config and re-pointing.
+Upstream a deployment's curve cannot change. In the fork, the owner or manager reparametrizes a live market by calling `setMarketCurveParams(marketParams, newCurveParams)` again: the IRM deploys (or reuses) the config for the new parameters and re-points the market at it. The swap clamps a non-zero stored `rateAtTarget` into the new `[minRateAtTarget, maxRateAtTarget]` band (a value already inside is untouched) and adaptation continues from there. There is no in-place parameter setter — an `AdaptiveCurveConfig` is itself immutable, so changing a curve always means resolving a (new or cached) config and re-pointing.
 
 The new parameters take effect on the **next** `borrowRate` call, where they can shift the rate:
 
@@ -53,10 +53,10 @@ The new parameters take effect on the **next** `borrowRate` call, where they can
 | `maxBorrowRate` | borrow rate limited to the new cap, `rateAtTarget` untouched | immediate, even at target |
 | `curveSteepness` | new slope: the same `rateAtTarget` and utilization give a different borrow rate | immediate |
 | `targetUtilization` | the error is recomputed for the same utilization, so the rate shifts | immediate |
-| `minRateAtTarget` / `maxRateAtTarget` | the new bound snaps the saved `rateAtTarget` into the new range | lazy (see below) |
+| `minRateAtTarget` / `maxRateAtTarget` | prices from the `rateAtTarget` already clamped into the new range at the swap | immediate, even at target |
 | `adjustmentSpeed` | changes the speed of future adaptation | gradual |
 
-Only a change to the `minRateAtTarget` / `maxRateAtTarget` bounds can move the stored `rateAtTarget` discontinuously. When the new range still contains the stored value (for instance, a widened range), adaptation continues from where it was, with no jump. When the range is **narrowed** below the current value, the next adapting call snaps `rateAtTarget` to the nearest new bound in one step. The size of that jump is the gap between the old value and the new bound, which the caller sets by choosing the bound.
+Only a change to the `minRateAtTarget` / `maxRateAtTarget` bounds can move the stored `rateAtTarget` discontinuously. When the new range still contains the stored value (for instance, a widened range), adaptation continues from where it was, with no jump. When the range is **narrowed** past the stored value, the setter clamps `rateAtTarget` onto the nearest new bound at the swap itself. The size of that jump is the gap between the old value and the new bound, which the caller sets by choosing the bound.
 
 The graph illustrates both: a new range that still contains the stored `rateAtTarget` (smooth), and a new `maxRateAtTarget` below it (snap down).
 
@@ -64,7 +64,7 @@ The graph illustrates both: a new range that still contains the stored `rateAtTa
 
 Two more things to know about a reparametrization:
 
-* **The re-clamp is lazy.** `rateAtTarget` is re-clamped into the new range only on a call where utilization is off target **and** time has elapsed. Pointing a market at a tighter range followed by an at-target (or same-block) call leaves `rateAtTarget` out of range, used unchanged, until a later adapting call (off target, time elapsed, nonzero `adjustmentSpeed`) snaps it in — with `adjustmentSpeed` 0 the stored value never re-enters the band. `maxBorrowRate` is the only bound that applies immediately in that interval.
+* **The re-clamp is eager.** The setter clamps a non-zero stored `rateAtTarget` into the new range at the swap, so a narrowed band takes effect on the very next call — even at target utilization, in the same block, or with `adjustmentSpeed` 0. A stored rate of 0 (a market this instance has never priced) is left alone, and the first interaction still seeds `initialRateAtTarget`.
 * **The new parameters apply to the whole period since the last update.** The first `borrowRate` after a swap averages over the entire interval since `market.lastUpdate`, which may precede the swap — old and new parameters are not blended at the swap timestamp. To settle the pre-reparametrization interval at the old parameters, call `accrueInterest` immediately before swapping.
 
 ### Deployment and authorization
@@ -106,7 +106,7 @@ With an `8%/year` cap on the same curve, the charged rate follows the curve, the
 
 This section states what each actor can do to the model. Who holds each, and through what process it acts, is a governance matter outside this spec.
 
-**IRM owner** (governance) holds authorization and the curve: it rotates itself (`transferOwnership`) and the manager (`setManager`), and can set or re-point any market's curve (`setMarketCurveParams`), swapping its entire curve — and with it every future rate the market reads — in a single transaction, with `rateAtTarget` carrying across the swap. The owner is trusted to choose well-formed parameters (the config constructor's validation ensures `borrowRate` neither reverts nor returns a negative rate) and to judge whether a curve is economically sound and `maxBorrowRate` set sensibly. The model never custodies funds, so this is power over the rate Morpho reads, not over deposits.
+**IRM owner** (governance) holds authorization and the curve: it rotates itself (`transferOwnership`) and the manager (`setManager`), and can set or re-point any market's curve (`setMarketCurveParams`), swapping its entire curve — and with it every future rate the market reads — in a single transaction, with `rateAtTarget` carried across the swap, clamped into the new band. The owner is trusted to choose well-formed parameters (the config constructor's validation ensures `borrowRate` neither reverts nor returns a negative rate) and to judge whether a curve is economically sound and `maxBorrowRate` set sensibly. The model never custodies funds, so this is power over the rate Morpho reads, not over deposits.
 
 **IRM manager** (operations) is scoped: it may call `setMarketCurveParams` — set or reparametrize any market's curve — but cannot change `owner` or `manager` (`transferOwnership`/`setManager` are owner-only). It exists so day-to-day curve tuning need not use the owner key. Its power over rates is the same as the owner's — it simply cannot change authorization.
 

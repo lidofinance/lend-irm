@@ -21,13 +21,13 @@ Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage 
 
 | File | Lines | Statements | Branches | Functions |
 |---|---|---|---|---|
-| `src/adaptive-curve-irm/AdaptiveCurveIrm.sol` | 100% (56/56) | 100% (66/66) | 100% (12/12) | 100% (7/7) |
+| `src/adaptive-curve-irm/AdaptiveCurveIrm.sol` | 100% (59/59) | 100% (69/69) | 100% (13/13) | 100% (7/7) |
 | `src/adaptive-curve-irm/AdaptiveCurveConfig.sol` | 100% (24/24) | 100% (21/21) | 100% (24/24) | 100% (3/3) |
 | `src/adaptive-curve-irm/libraries/**` (4 files) | 100% (65/65) | 100% (93/93) | 100% (13/13) | 100% (10/10) |
 | `src/common/OwnerManagerBase.sol` | 100% (19/19) | 100% (13/13) | 100% (8/8) | 100% (6/6) |
 | `src/irm-router/IrmRouter.sol` | 100% (30/30) | 100% (29/29) | 100% (15/15) | 100% (5/5) |
 | `src/linear-kink-irm/LinearKinkIrm.sol` | 100% (25/25) | 100% (30/30) | 100% (11/11) | 100% (5/5) |
-| **Total** | **100% (219/219)** | **100% (252/252)** | **100% (83/83)** | **100% (36/36)** |
+| **Total** | **100% (222/222)** | **100% (255/255)** | **100% (84/84)** | **100% (36/36)** |
 
 ## 1. Per-market configuration
 
@@ -75,14 +75,14 @@ Coverage (`forge coverage --no-match-test "PingEveryMinute" --no-match-coverage 
 
 ## 4. Reparametrization (re-pointing)
 
-**What changed.** Re-calling `setMarketCurveParams` re-points a live market. `rateAtTarget` is untouched by the swap and the new params take effect on the next call. See SPECIFICATION §Reparametrization. Every poke in these tests (`_pokeExpecting`) asserts the charged rate and the resulting `rateAtTarget` exactly against the reference under the currently-registered params.
+**What changed.** Re-calling `setMarketCurveParams` re-points a live market, clamping a non-zero stored `rateAtTarget` into the new band at the swap. See SPECIFICATION §Reparametrization. Every poke in these tests (`_pokeExpecting`) asserts the charged rate and the resulting `rateAtTarget` exactly against the reference under the currently-registered params.
 
 | Verifies | Test |
 |---|---|
 | A new band that still contains the stored rate preserves `rateAtTarget` with no spike | `test_reparam_statePersists_noSpike_whenBoundsContainRate` |
-| A narrowed band snaps the stored rate exactly onto the nearest new bound on the next adapting call | `test_reparam_rateRises_whenNewMinAboveStoredRate`, `test_reparam_rateDrops_whenNewMaxBelowStoredRate` |
-| Widening lets the rate creep (12 hourly steps, each exact per the reference, ceiling not reached), and a later narrowing snaps it exactly onto the new ceiling in one step | `test_reparam_widenLetsRateCreep_thenNarrowShocks` |
-| The re-clamp is lazy: after tightening `maxRateAtTarget`, an at-target poke leaves `rateAtTarget` exactly unchanged (out of range, charged as-is) until an off-target call re-bounds it exactly onto the new MAX | `test_reparam_tighterMax_atTargetPokeDefersRebound` |
+| A narrowed band clamps the stored rate exactly onto the nearest new bound at the swap itself, and the next call adapts from the clamped value exactly per the reference | `test_reparam_rateRises_whenNewMinAboveStoredRate`, `test_reparam_rateDrops_whenNewMaxBelowStoredRate` |
+| Widening lets the rate creep (12 hourly steps, each exact per the reference, ceiling not reached), and a later narrowing clamps it onto the new ceiling at the swap | `test_reparam_widenLetsRateCreep_thenNarrowClampsAtSwap` |
+| A tightened `maxRateAtTarget` applies immediately even at target utilization (the at-target poke charges the clamped rate), and a never-priced market keeps its 0 sentinel through swaps with the first interaction still seeding the initial rate | `test_reparam_tighterMax_appliesImmediately_evenAtTarget`, `test_reparam_freshMarketKeepsSentinel_thenSeedsInitialRate` |
 | Changing `targetUtilization` / `curveSteepness` reprices the same utilization exactly per the reference with the new params, without moving `rateAtTarget` | `test_reparam_targetShift_changesChargedRate_keepsState`, `test_reparam_steepnessShift_changesChargedRate_keepsState` |
 | A new `adjustmentSpeed` changes future adaptation (both the fast arm and a slow control are exact per the reference) without moving the rate at the swap | `test_reparam_adjustmentSpeedShift_changesFutureAdaptation_keepsState` |
 | The cap applies and a tighter cap takes effect immediately on the next call, leaving `rateAtTarget` intact | `test_reparam_capAppliesAndTightens`, `test_reparam_capBelowAdaptedRate_clampsImmediately_keepsState` |
@@ -122,7 +122,7 @@ Specs live in `certora/{confs,specs}/`, and all rules pass. All confs pin `solc-
 | The periphery `borrowRateView` is equivalent to the contract's, for both the returned values and the revert conditions, with params resolved from the linked IRM and its pointed-at `AdaptiveCurveConfig` | `BorrowRateView` |
 | The periphery `expectedMarketBalances` is equivalent to `MorphoBalancesLib`'s (values and reverts) | `ExpectedMarketBalances` |
 | `borrowRate` and `borrowRateView` never return more than `maxBorrowRate` when the cap is enabled (curve and adaptation abstracted to NONDET, so the final clamp is verified non-vacuously) | `MaxBorrowRate` |
-| `borrowRate` keeps `rateAtTarget[id]` within `[minRateAtTarget, maxRateAtTarget]`, under symbolic config satisfying the validation bounds | `RateAtTargetBand` |
+| `borrowRate` keeps `rateAtTarget[id]` within `[minRateAtTarget, maxRateAtTarget]` under symbolic config satisfying the validation bounds, and `setMarketCurveParams` clamps a non-zero stored rate into the new band at the swap (the 0 sentinel survives) | `RateAtTargetBand` |
 | The fork-only kinked IRM never charges above the setter's peak (`capRespected`) or `MAX_BORROW_RATE` on any reachable storage (`peakCapped` invariant + `rateNeverExceedsMax`), is monotone in utilization (`monotonic`), returns `borrowRate == borrowRateView` (`stateless`), reverts `config not set` when unconfigured (`revertsWhenUnset`), and round-trips the setter's parameters through the view with same-id agreement (`configuredMarketSucceeds`, `setterRoundTrip`) — the scene is the production contract alone, no harness | `LinearKinkIrm` |
 | The router forwards `borrowRateView` to exactly the routed implementation's value (the state-changing forward is summarized away by the probe model), `borrowRate` is Morpho-only, the routing table moves only through authorized `setMarketIrm` calls and never back to zero, unrouted markets revert on every pricing call, `initialize` is one-shot, routing a not-yet-created market makes no call into Morpho or the implementation (`uncreatedMarketRoutesUntouched`, the pre-creation decay regression at the call-occurrence level), and a live-market switch accrues and probes exactly once (`liveMarketRoutesAccruedAndProbed`) | `IrmRouter` |
 

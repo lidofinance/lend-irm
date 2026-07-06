@@ -34,6 +34,7 @@ interface IAdaptiveCurveIrm is IIrm, IOwnerManager {
     function deployedCurveConfigs(bytes32 paramsHash) external view returns (IAdaptiveCurveConfig);
 
     /// @notice Deploys (or reuses, by params hash) an AdaptiveCurveConfig from `curveParams` and sets it as the config
-    /// for market `id = marketParams.id()`. Owner or manager only.
+    /// for market `id = marketParams.id()`. A non-zero stored `rateAtTarget` is clamped into the new
+    /// `[minRateAtTarget, maxRateAtTarget]` band, so a narrowed band takes effect immediately. Owner or manager only.
     function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams) external;
 }
