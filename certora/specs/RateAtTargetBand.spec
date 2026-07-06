@@ -13,7 +13,7 @@
 // that the contract routes only in-band values into storage (first interaction -> initial, no adaptation ->
 // unchanged, adaptation -> bounded). `_curve` is NONDET (it feeds only the returned rate, not the stored state).
 //
-// `validConfig()` assumes the invariants `AdaptiveCurveConfig`'s constructor (`_validateConfig`) guarantees but the Prover
+// `validConfig()` assumes the invariants `AdaptiveCurveConfig`'s constructor (`_validateCurveParams`) guarantees but the Prover
 // does not model on the linked config's immutables. The market/elapsed bounds keep the inline WAD math from
 // overflowing, giving a reachable, non-reverting path.
 
@@ -44,7 +44,7 @@ function inBand() returns int256 {
     return r;
 }
 
-// What AdaptiveCurveConfig's _validateConfig guarantees about the linked config's params.
+// What AdaptiveCurveConfig's _validateCurveParams guarantees about the linked config's params.
 function validConfig() {
     AdaptiveCurveIrm.AdaptiveCurveParams cfg = Cfg.getCurveParams();
     require cfg.minRateAtTarget > 0;

@@ -86,7 +86,7 @@ Upstream puts no ceiling on the charged rate. Above target the curve multiplies 
 returned = min( curveRate,  maxBorrowRate )      # only when maxBorrowRate != 0
 ```
 
-The cap only clamps the returned value and never touches the stored `rateAtTarget`. Adaptation responds to the utilization error rather than the current rate, so clamping `rateAtTarget` would interfere with the control loop, while clamping the output leaves it running exactly as upstream. The state machine behaves the same whether the cap is on or off, and raising or removing the cap (by re-pointing the market at a new config) brings the borrow rate straight back to the curve value on the next call.
+The cap only clamps the returned value and never touches the stored `rateAtTarget`. Adaptation responds to the utilization error rather than the current rate, so clamping `rateAtTarget` would interfere with the control loop, while clamping the output leaves it running exactly as upstream. The state machine behaves the same whether the cap is on or off, and raising or removing the cap (by re-pointing the market at a new config) brings the borrow rate straight to `min(curve value, new cap)` on the next call.
 
 The cap clips the high-utilization peak of the curve, or the whole curve if it sits below `rateAtTarget`. Setting `maxBorrowRate` to 0 turns it off. A cap below the curve's operating range makes the market effectively interest-free — that is what the chosen value does, and avoiding it is on the caller, not a contract defect.
 
