@@ -9,9 +9,9 @@
 // includes one linked config (`Cfg`): the inductive rule pins it as the bound address, and the setter applies it
 // through the real `applyIrmConfig(MarketParams,address)` path. The market id is derived with the pure
 // `Lib.toId` helper, which computes the same `MarketParamsLib.id()` the contract computes internally.
-// `_newRateAtTarget` is summarized to an arbitrary value within [min, max] -- exactly the guarantee of its final
-// `.bound(min, max)` -- so the rule checks that only in-band values reach storage.
-// `_curve` is NONDET (it feeds only the returned rate, not the stored state).
+// `AdaptiveCurveMathLib._newRateAtTarget` is summarized to an arbitrary value within [min, max] -- exactly the
+// guarantee of its final `.bound(min, max)` -- so the rule checks that only in-band values reach storage.
+// `AdaptiveCurveMathLib._curve` is NONDET (it feeds only the returned rate, not the stored state).
 //
 // The linked `AdaptiveCurveConfig` is immutable, so its parameters do not change within this proof.
 // `validConfig()` assumes they are valid; the IRM setter does not validate them. The market/elapsed bounds keep the
@@ -29,9 +29,9 @@ methods {
 
     function _.getCurveParams() external => DISPATCHER(true);
 
-    function AdaptiveCurveIrm._newRateAtTarget(int256, int256, AdaptiveCurveIrm.AdaptiveCurveParams memory) internal returns (int256)
+    function AdaptiveCurveMathLib._newRateAtTarget(int256, int256, AdaptiveCurveIrm.AdaptiveCurveParams memory) internal returns (int256)
         => inBand();
-    function AdaptiveCurveIrm._curve(int256, int256, int256) internal returns (int256) => NONDET;
+    function AdaptiveCurveMathLib._curve(int256, int256, int256) internal returns (int256) => NONDET;
 }
 
 definition WAD() returns int256 = 1000000000000000000;

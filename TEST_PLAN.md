@@ -18,7 +18,7 @@ The retained upstream tests apply a default config built from `test/ConstantsLib
 | IrmRouter (routing) | `IrmRouterTest`, Certora `IrmRouter` |
 | Permissionless config factory | `IrmConfigFactoryTest` |
 
-**Exactness policy.** Differential Adaptive checks use `test/CurveRefHelper.sol`, a separate implementation that reuses the production math libraries but independently composes the curve, adaptation, and cap. The ping-every-minute tests compare every step exactly, and the stateful invariant compares an exact probe after each fuzzed call sequence; the preceding fuzzed calls are not individually asserted.
+**Exactness policy.** Differential Adaptive checks use `test/CurveRefHelper.sol`, a separate implementation that reuses the low-level arithmetic libraries but does not call `AdaptiveCurveMathLib`; it independently composes the curve, adaptation, and cap. The ping-every-minute tests compare every step exactly, and the stateful invariant compares an exact probe after each fuzzed call sequence; the preceding fuzzed calls are not individually asserted.
 
 The retained upstream scenario tests keep their coarse `assertApproxEqRel` checks, while separate differential tests provide exact reference coverage. `ExpLibTest` retains its directional and banded checks. `LinearKinkIrmTest.testFuzz_monotonicAndBounded` is directional. Of the three router `assertGt` checks, two establish an adapted-rate setup and one checks switch-time debt growth qualitatively. The migration test also uses a qualitative inequality to confirm that the two models return different rates; its forwarding checks and the router's equality checks are exact.
 
@@ -28,15 +28,15 @@ Coverage is complete across executable `src/` code with `forge coverage --offlin
 
 | File | Lines | Statements | Branches | Functions |
 |---|---|---|---|---|
-| `src/adaptive-curve-irm/AdaptiveCurveIrm.sol` | 100% (54/54) | 100% (64/64) | 100% (12/12) | 100% (7/7) |
+| `src/adaptive-curve-irm/AdaptiveCurveIrm.sol` | 100% (29/29) | 100% (31/31) | 100% (7/7) | 100% (5/5) |
 | `src/adaptive-curve-irm/AdaptiveCurveConfig.sol` | 100% (24/24) | 100% (21/21) | 100% (24/24) | 100% (3/3) |
-| `src/adaptive-curve-irm/libraries/**` (4 executable files) | 100% (65/65) | 100% (93/93) | 100% (13/13) | 100% (10/10) |
+| `src/adaptive-curve-irm/libraries/**` (5 executable files) | 100% (67/67) | 100% (95/95) | 100% (13/13) | 100% (11/11) |
 | `src/common/OwnerManagerBase.sol` | 100% (19/19) | 100% (13/13) | 100% (8/8) | 100% (6/6) |
 | `src/irm-config-factory/IrmConfigFactory.sol` | 100% (18/18) | 100% (16/16) | 100% (2/2) | 100% (4/4) |
 | `src/irm-router/IrmRouter.sol` | 100% (30/30) | 100% (29/29) | 100% (15/15) | 100% (5/5) |
 | `src/linear-kink-irm/LinearKinkConfig.sol` | 100% (10/10) | 100% (8/8) | 100% (6/6) | 100% (2/2) |
 | `src/linear-kink-irm/LinearKinkIrm.sol` | 100% (23/23) | 100% (29/29) | 100% (5/5) | 100% (5/5) |
-| **Total** | **100% (243/243)** | **100% (273/273)** | **100% (85/85)** | **100% (42/42)** |
+| **Total** | **100% (220/220)** | **100% (242/242)** | **100% (80/80)** | **100% (41/41)** |
 
 ## 1. Per-market configuration
 

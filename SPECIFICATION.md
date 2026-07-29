@@ -150,6 +150,7 @@ This section states what each actor can do to the model. Who holds each, and thr
 - `src/adaptive-curve-irm/interfaces/IAdaptiveCurveIrm.sol` — the typed contract surface: the per-market config pointer, adapting state, owner/manager roles, and inherited common config and `IIrm` interfaces.
 - `src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol` — the per-market config contract surface (`getCurveParams()` and the per-field getters).
 - `src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol` — the shared top-level `AdaptiveCurveParams` struct.
+- `src/adaptive-curve-irm/libraries/AdaptiveCurveMathLib.sol` — the shared implementation of the Adaptive utilization error, adaptation, trapezoidal average, curve, and output cap.
 - `src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol` — the periphery recompute library described above.
 
 ## LinearKinkIrm

@@ -4,9 +4,14 @@ pragma solidity ^0.8.0;
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
 import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
+import {ExpLib} from "../src/adaptive-curve-irm/libraries/ExpLib.sol";
+import {MathLib, WAD_INT as WAD} from "../src/adaptive-curve-irm/libraries/MathLib.sol";
+import {UtilsLib} from "../src/adaptive-curve-irm/libraries/UtilsLib.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
 import {IOwnerManager} from "../src/common/IOwnerManager.sol";
+import {MarketParamsLib} from "../lib/lido-lend/src/libraries/MarketParamsLib.sol";
+import {MathLib as MorphoMathLib} from "../lib/lido-lend/src/libraries/MathLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
 

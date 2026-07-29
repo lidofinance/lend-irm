@@ -6,9 +6,10 @@
 // call. The spec links an AdaptiveCurveConfig (`Cfg`), pins it as the config registered for the market (via the native
 // `marketCurveConfig(id)` getter), and reads the cap from it. The market id is derived from `marketParams` with the pure
 // `Lib.toId` helper, which computes the same `MarketParamsLib.id()` the contract computes internally. The curve
-// evaluation (`_curve`) and adaptation step (`_newRateAtTarget`) are abstracted to NONDET -- that is exactly the cap
-// property: whatever the curve produces, an enabled cap must bound the charged rate via the final clamp. It also
-// keeps the heavy WAD/exp math off the reachable path, so the rules verify non-vacuously (rule_sanity passes).
+// evaluation (`AdaptiveCurveMathLib._curve`) and adaptation step (`AdaptiveCurveMathLib._newRateAtTarget`) are
+// abstracted to NONDET -- that is exactly the cap property: whatever the curve produces, an enabled cap must bound
+// the charged rate via the final clamp. It also keeps the heavy WAD/exp math off the reachable path, so the rules
+// verify non-vacuously (rule_sanity passes).
 
 using AdaptiveCurveIrm as Irm;
 using AdaptiveCurveConfig as Cfg;
@@ -21,8 +22,8 @@ methods {
 
     function _.getCurveParams() external => DISPATCHER(true);
 
-    function AdaptiveCurveIrm._curve(int256, int256, int256) internal returns (int256) => NONDET;
-    function AdaptiveCurveIrm._newRateAtTarget(int256, int256, AdaptiveCurveIrm.AdaptiveCurveParams memory) internal returns (int256)
+    function AdaptiveCurveMathLib._curve(int256, int256, int256) internal returns (int256) => NONDET;
+    function AdaptiveCurveMathLib._newRateAtTarget(int256, int256, AdaptiveCurveIrm.AdaptiveCurveParams memory) internal returns (int256)
         => NONDET;
 }
 

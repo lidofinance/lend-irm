@@ -6,10 +6,8 @@ import {IAdaptiveCurveIrm} from "../../interfaces/IAdaptiveCurveIrm.sol";
 import {IAdaptiveCurveConfig} from "../../interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../../interfaces/IAdaptiveCurveTypes.sol";
 
-import {ExpLib} from "../ExpLib.sol";
-import {UtilsLib} from "../UtilsLib.sol";
+import {AdaptiveCurveMathLib} from "../AdaptiveCurveMathLib.sol";
 import {ErrorsLib} from "../ErrorsLib.sol";
-import {MathLib, WAD_INT as WAD} from "../MathLib.sol";
 import {SharesMathLib} from "../../../../lib/lido-lend/src/libraries/SharesMathLib.sol";
 import {MathLib as MorphoMathLib} from "../../../../lib/lido-lend/src/libraries/MathLib.sol";
 import {UtilsLib as MorphoUtilsLib} from "../../../../lib/lido-lend/src/libraries/UtilsLib.sol";
@@ -20,8 +18,6 @@ import {UtilsLib as MorphoUtilsLib} from "../../../../lib/lido-lend/src/librarie
 /// @dev Must be used only for markets routed to an AdaptiveCurveIrm (passed as `adaptiveCurveIrm`).
 /// @dev Reverts with `CONFIG_NOT_SET` when the market has no config registered on the IRM.
 library AdaptiveCurveIrmLib {
-    using MathLib for int256;
-    using UtilsLib for int256;
     using MorphoMathLib for uint256;
     using MorphoMathLib for uint128;
     using SharesMathLib for uint256;
@@ -84,75 +80,8 @@ library AdaptiveCurveIrmLib {
         require(address(config) != address(0), ErrorsLib.CONFIG_NOT_SET);
         AdaptiveCurveParams memory p = config.getCurveParams();
 
-        int256 err = _err(market, p.targetUtilization);
-
         int256 startRateAtTarget = IAdaptiveCurveIrm(adaptiveCurveIrm).rateAtTarget(id);
 
-        int256 avgRateAtTarget;
-        int256 endRateAtTarget;
-
-        if (startRateAtTarget == 0) {
-            // First interaction.
-            avgRateAtTarget = p.initialRateAtTarget;
-            endRateAtTarget = avgRateAtTarget;
-        } else {
-            // The speed is assumed constant between two updates, but it is in fact not constant because of interest.
-            // So the rate is always underestimated.
-            int256 speed = p.adjustmentSpeed.wMulToZero(err);
-            // market.lastUpdate != 0 because it is not the first interaction with this market.
-            // Safe "unchecked" cast because block.timestamp - market.lastUpdate <= block.timestamp <= type(int256).max.
-            int256 elapsed = int256(block.timestamp - market.lastUpdate);
-            int256 linearAdaptation = speed * elapsed;
-
-            if (linearAdaptation == 0) {
-                // If linearAdaptation == 0, avgRateAtTarget = endRateAtTarget = startRateAtTarget;
-                avgRateAtTarget = startRateAtTarget;
-                endRateAtTarget = startRateAtTarget;
-            } else {
-                // Trapezoidal approximation of the average rate (N = 2), identical to the IRM.
-                endRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation, p);
-                int256 midRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation / 2, p);
-                avgRateAtTarget = (startRateAtTarget + endRateAtTarget + 2 * midRateAtTarget) / 4;
-            }
-        }
-
-        // Safe "unchecked" cast because avgRateAtTarget >= 0.
-        uint256 rate = uint256(_curve(avgRateAtTarget, err, p.curveSteepness));
-
-        // Mirrors the IRM's cap: bounds only the reported rate, `endRateAtTarget` untouched.
-        if (p.maxBorrowRate != 0 && rate > p.maxBorrowRate) rate = p.maxBorrowRate;
-
-        return (rate, endRateAtTarget);
-    }
-
-    /// @dev Returns the `err` (distance from target utilization, normalized) for a given market.
-    function _err(Market memory market, int256 targetUtilization) internal pure returns (int256) {
-        // Safe "unchecked" cast because the utilization is smaller than 1 (scaled by WAD).
-        int256 utilization =
-            int256(market.totalSupplyAssets > 0 ? market.totalBorrowAssets.wDivDown(market.totalSupplyAssets) : 0);
-        int256 errNormFactor = utilization > targetUtilization ? WAD - targetUtilization : targetUtilization;
-        return (utilization - targetUtilization).wDivToZero(errNormFactor);
-    }
-
-    /// @dev Returns the rate for a given `_rateAtTarget` and an `err`.
-    /// The formula of the curve is the following:
-    /// r = ((1-1/C)*err + 1) * rateAtTarget if err < 0
-    ///     ((C-1)*err + 1) * rateAtTarget else.
-    function _curve(int256 _rateAtTarget, int256 err, int256 curveSteepness) internal pure returns (int256) {
-        // Non negative because 1 - 1/C >= 0, C - 1 >= 0.
-        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(curveSteepness) : curveSteepness - WAD;
-        // Non negative if _rateAtTarget >= 0 because if err < 0, coeff <= 1.
-        return (coeff.wMulToZero(err) + WAD).wMulToZero(_rateAtTarget);
-    }
-
-    /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
-    /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, AdaptiveCurveParams memory p)
-        internal
-        pure
-        returns (int256)
-    {
-        // Non negative because minRateAtTarget > 0.
-        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation)).bound(p.minRateAtTarget, p.maxRateAtTarget);
+        return AdaptiveCurveMathLib.computeBorrowRate(p, startRateAtTarget, market);
     }
 }
