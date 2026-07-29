@@ -2,7 +2,7 @@
 
 The fork refactors and extends Morpho's `AdaptiveCurveIrm` with external per-market configs, owner/manager authorization, an optional output cap, reconfiguration, router-only state-changing pricing, and a periphery library that reads the selected config live. The Adaptive curve and adaptation formulas remain unchanged.
 
-The fork also replaces `FixedRateIrm` with `LinearKinkIrm` and adds the proxied `IrmRouter`. Both IRMs expose `IConfigurableIrm.applyIrmConfig(MarketParams,address)`: Adaptive stores the supplied config address, while LinearKink copies the returned parameters. The IRMs do not deploy configs, store config-parameter hashes, deduplicate configs, or maintain a config registry.
+The fork also replaces `FixedRateIrm` with `LinearKinkIrm`, adds the proxied `IrmRouter`, and includes a separate permissionless `IrmConfigFactory`. Both IRMs expose `IConfigurableIrm.applyIrmConfig(MarketParams,address)`: Adaptive stores the supplied config address, while LinearKink copies the returned parameters. The IRMs do not deploy configs, store config-parameter hashes, deduplicate configs, or maintain a config registry; deploy-or-reuse mappings exist only in `IrmConfigFactory`.
 
 The retained upstream tests apply a default config built from `test/ConstantsLib.sol`. Constructor validation replaces the removed upstream `testConstants`, and `bound`-based market shaping replaces rejection-heavy `vm.assume` filters. The sections below map each documented property to its tests.
 
@@ -16,6 +16,7 @@ The retained upstream tests apply a default config built from `test/ConstantsLib
 | Upgradeable (router proxy) | `IrmRouterProxyTest` |
 | LinearKinkIrm (replaces `FixedRateIrm`) | `LinearKinkConfigTest`, `LinearKinkIrmTest`, Certora `LinearKinkIrm` |
 | IrmRouter (routing) | `IrmRouterTest`, Certora `IrmRouter` |
+| Permissionless config factory | `IrmConfigFactoryTest` |
 
 **Exactness policy.** Differential Adaptive checks use `test/CurveRefHelper.sol`, a separate implementation that reuses the production math libraries but independently composes the curve, adaptation, and cap. The ping-every-minute tests compare every step exactly, and the stateful invariant compares an exact probe after each fuzzed call sequence; the preceding fuzzed calls are not individually asserted.
 
@@ -23,7 +24,7 @@ The retained upstream scenario tests keep their coarse `assertApproxEqRel` check
 
 Run the default suite with `forge test`. Run a deep campaign with `FOUNDRY_FUZZ_RUNS=65536 FOUNDRY_INVARIANT_RUNS=4096 forge test`.
 
-Coverage is complete across executable `src/` code with `forge coverage --offline --no-match-test "PingEveryMinute" --no-match-coverage "^test/" --report summary`. The command runs 136 tests and excludes the two 1B-gas ping loops because they do not complete under coverage instrumentation. All executable `src/` files remain in the coverage denominator.
+Coverage is complete across executable `src/` code with `forge coverage --offline --no-match-test "PingEveryMinute" --no-match-coverage "^test/" --report summary`. The command runs 144 tests and excludes the two 1B-gas ping loops because they do not complete under coverage instrumentation. All executable `src/` files remain in the coverage denominator.
 
 | File | Lines | Statements | Branches | Functions |
 |---|---|---|---|---|
@@ -31,10 +32,11 @@ Coverage is complete across executable `src/` code with `forge coverage --offlin
 | `src/adaptive-curve-irm/AdaptiveCurveConfig.sol` | 100% (24/24) | 100% (21/21) | 100% (24/24) | 100% (3/3) |
 | `src/adaptive-curve-irm/libraries/**` (4 executable files) | 100% (65/65) | 100% (93/93) | 100% (13/13) | 100% (10/10) |
 | `src/common/OwnerManagerBase.sol` | 100% (19/19) | 100% (13/13) | 100% (8/8) | 100% (6/6) |
+| `src/irm-config-factory/IrmConfigFactory.sol` | 100% (18/18) | 100% (16/16) | 100% (2/2) | 100% (4/4) |
 | `src/irm-router/IrmRouter.sol` | 100% (30/30) | 100% (29/29) | 100% (15/15) | 100% (5/5) |
 | `src/linear-kink-irm/LinearKinkConfig.sol` | 100% (10/10) | 100% (8/8) | 100% (6/6) | 100% (2/2) |
 | `src/linear-kink-irm/LinearKinkIrm.sol` | 100% (23/23) | 100% (29/29) | 100% (5/5) | 100% (5/5) |
-| **Total** | **100% (225/225)** | **100% (257/257)** | **100% (83/83)** | **100% (38/38)** |
+| **Total** | **100% (243/243)** | **100% (273/273)** | **100% (85/85)** | **100% (42/42)** |
 
 ## 1. Per-market configuration
 
@@ -168,3 +170,14 @@ Specs live in `certora/{confs,specs}/`. All confs pin `solc-0.8.35` — the Lido
 | A live market migrates between models and uses the selected implementation after each switch; in the same-block snapshot scenario a fresh Adaptive implementation seeds from the old value; reattaching a previously used Adaptive implementation resumes its stored value | `test_migration_kinkToAdaptiveAndBack`, `test_migration_snapshotSeedsFreshAdaptive`, `test_migration_backToUsedAdaptiveResumesStaleRate` |
 
 The mock stands in for the LidoLend core, keeping the suite a unit test with direct market-state control: it stores markets, pings the market's IRM the way the core does on accrual and creation, and stamps `lastUpdate`.
+
+## 10. IrmConfigFactory (fork-only)
+
+**What changed.** `IrmConfigFactory` permissionlessly returns an existing included immutable config implementation for a parameter set or deploys one if absent. It computes `keccak256(abi.encode(params))`, uses separate mappings for Adaptive and LinearKink, and delegates all validation to the config constructors. It is optional: neither IRM references it or restricts applied configs to its outputs.
+
+| Verifies | Test |
+|---|---|
+| Before deployment the parameter-based getter returns zero; any caller can get or deploy each concrete config, the getter then resolves its address, the returned parameters round-trip, and the model-specific deployment event contains the exact parameter hash and address | `test_getOrDeployAdaptiveCurveConfig_deploysAndResolvesByParams`, `test_getOrDeployLinearKinkConfig_deploysAndResolvesByParams` |
+| Repeating the same parameter set from another caller returns the same address and emits no new deployment event | `test_getOrDeployAdaptiveCurveConfig_reusesExistingConfig`, `test_getOrDeployLinearKinkConfig_reusesExistingConfig` |
+| Distinct valid parameter sets produce distinct hashes and config addresses in the corresponding mapping | `test_getOrDeployAdaptiveCurveConfig_distinctParamsDeployDistinctConfigs`, `test_getOrDeployLinearKinkConfig_distinctParamsDeployDistinctConfigs` |
+| Invalid parameters propagate the concrete constructor revert and leave the corresponding mapping empty | `test_getOrDeployAdaptiveCurveConfig_constructorValidationReverts`, `test_getOrDeployLinearKinkConfig_constructorValidationReverts` |

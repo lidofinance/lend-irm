@@ -1,8 +1,25 @@
 # Lido Lend IRM — Specification
 
-This document specifies three runtime contracts—two interest rate models and the router in front of them—and the included config implementations. [AdaptiveCurveIrm](#adaptivecurveirm) is the upstream Morpho adaptive model plus per-market configuration, owner/manager authorization, reparametrization, and an optional borrow-rate cap. [LinearKinkIrm](#linearkinkirm) is a fork-only kinked ("jump rate") model with no adapting state, implemented from scratch. Both IRMs inherit `OwnerManagerBase` and the shared `IConfigurableIrm` surface: `applyIrmConfig(MarketParams,address)` and `IrmConfigApplied`. They are standalone non-proxied contracts intended to sit behind [IrmRouter](#irmrouter), the proxied market-facing contract that routes each market to an implementation.
+This document specifies four runtime contracts—two interest rate models, the router in front of them, and a permissionless config factory—and the included config implementations. [AdaptiveCurveIrm](#adaptivecurveirm) is the upstream Morpho adaptive model plus per-market configuration, owner/manager authorization, reparametrization, and an optional borrow-rate cap. [LinearKinkIrm](#linearkinkirm) is a fork-only kinked ("jump rate") model with no adapting state, implemented from scratch. Both IRMs inherit `OwnerManagerBase` and the shared `IConfigurableIrm` surface: `applyIrmConfig(MarketParams,address)` and `IrmConfigApplied`. They are standalone non-proxied contracts intended to sit behind [IrmRouter](#irmrouter), the proxied market-facing contract that routes each market to an implementation. [IrmConfigFactory](#irmconfigfactory) optionally deploys or reuses the included immutable config contracts.
 
-The identical config-application ABI is the common abstraction; the runtime representation is deliberately IRM-specific. Adaptive stores the config address and reads it while pricing, whereas LinearKink copies the config's values into packed storage and does not retain the address. The IRMs neither know nor constrain how a config address was created or selected. They do not validate values returned by config getters; the owner or manager that applies a config guarantees that its parameters are valid.
+The identical config-application ABI is the common abstraction; the runtime representation is deliberately IRM-specific. Adaptive stores the config address and reads it while pricing, whereas LinearKink copies the config's values into packed storage and does not retain the address. The IRMs neither know nor constrain how a config address was created or selected, and they do not reference `IrmConfigFactory`. They do not validate values returned by config getters; the owner or manager that applies a config guarantees that its parameters are valid.
+
+## IrmConfigFactory
+
+`IrmConfigFactory` is an optional standalone contract with no owner or manager. Any caller may ask it to return an existing included immutable config implementation for a parameter set or deploy one if absent:
+
+```solidity
+function getOrDeployAdaptiveCurveConfig(AdaptiveCurveParams calldata params) external returns (address config);
+function getOrDeployLinearKinkConfig(LinearKinkParams calldata params) external returns (address config);
+```
+
+Each get-or-deploy function computes `paramsHash = keccak256(abi.encode(params))` and reads its private model-specific mapping. A non-zero entry is returned unchanged. For an empty entry, the factory creates the corresponding concrete config, stores and returns its address, and emits `AdaptiveCurveConfigDeployed` or `LinearKinkConfigDeployed`. The config constructor performs all parameter validation; a constructor revert leaves the mapping empty.
+
+`getAdaptiveCurveConfig(params)` and `getLinearKinkConfig(params)` compute the same model-specific hash and return the mapped address, or zero if that parameter set has not been deployed. Callers therefore do not need to reproduce the ABI encoding or hash calculation.
+
+Reuse is scoped to one factory instance and the exact ABI-encoded parameter set. The two models use separate mappings. The factory does not apply configs to markets or route markets, and the IRMs accept ABI-compatible configs obtained elsewhere.
+
+The normative surfaces are `src/irm-config-factory/IrmConfigFactory.sol` and `src/irm-config-factory/interfaces/IIrmConfigFactory.sol`.
 
 ## AdaptiveCurveIrm
 
@@ -210,7 +227,7 @@ Routing (and re-routing) a market is a single privileged call:
 - **Probe scope.** The probe checks that the new implementation can price the current post-accrual market state when called by the router. It catches an implementation with no effective parameters and an Adaptive implementation constructed for another router, but it cannot guarantee future behavior of arbitrary or mutable implementation code.
 - **Pre-creation routing.** The router always reads `market(id)` from Morpho. If the returned `lastUpdate` is zero, it then stores the pointer without calling `accrueInterest` or the implementation. This avoids prematurely seeding a stateful IRM. `createMarket` later performs the first `borrowRate` call and reverts atomically if the route or implementation cannot price the new market.
 
-For a **new** market using either supplied IRM, call `setMarketIrm` and `applyIrmConfig` in either order, then call `createMarket`. Creation reverts with `irm not set` while the route is zero and with `config not set` while the selected IRM has no effective parameters. Each successful pre-creation routing call may change the router pointer and emits an event, but it does not touch implementation state.
+For a **new** market using either supplied IRM, first obtain a config, optionally through permissionless `IrmConfigFactory`; call `setMarketIrm` and `applyIrmConfig` in either order, then call `createMarket`. Creation reverts with `irm not set` while the route is zero and with `config not set` while the selected IRM has no effective parameters. Each successful pre-creation routing call may change the router pointer and emits an event, but it does not touch implementation state.
 
 ### Migration
 
