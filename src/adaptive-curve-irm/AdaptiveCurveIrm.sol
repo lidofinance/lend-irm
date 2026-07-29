@@ -5,7 +5,7 @@ import {IIrm} from "../../lib/lido-lend/src/interfaces/IIrm.sol";
 import {IAdaptiveCurveIrm} from "./interfaces/IAdaptiveCurveIrm.sol";
 import {IAdaptiveCurveConfig} from "./interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "./interfaces/IAdaptiveCurveTypes.sol";
-import {AdaptiveCurveConfig} from "./AdaptiveCurveConfig.sol";
+import {IConfigurableIrm} from "../common/IConfigurableIrm.sol";
 import {OwnerManagerBase} from "../common/OwnerManagerBase.sol";
 import {OwnerManagerErrors} from "../common/OwnerManagerErrors.sol";
 
@@ -19,9 +19,8 @@ import {MathLib as MorphoMathLib} from "../../lib/lido-lend/src/libraries/MathLi
 
 /// @title AdaptiveCurveIrm
 /// @author Morpho Labs. Modified by Lido.
-/// @notice One immutable instance serves many markets keyed by `Id`: each market points at an immutable
-/// AdaptiveCurveConfig (deployed and deduplicated here) and keeps its own adapting `rateAtTarget`. The curve and its
-/// adaptation keep the upstream formulas, parameterized per market. Meant to sit behind IrmRouter.
+/// @notice One immutable instance serves many markets keyed by `Id`, each with a config contract and an adapting
+/// `rateAtTarget`. It uses the upstream curve and adaptation formulas and is intended to sit behind IrmRouter.
 contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     using MathLib for int256;
     using UtilsLib for int256;
@@ -52,9 +51,6 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     /// @inheritdoc IAdaptiveCurveIrm
     mapping(Id => IAdaptiveCurveConfig) public marketCurveConfig;
 
-    /// @inheritdoc IAdaptiveCurveIrm
-    mapping(bytes32 => IAdaptiveCurveConfig) public deployedCurveConfigs;
-
     // ---
     // CONSTRUCTOR
     // ---
@@ -72,23 +68,13 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     // CONFIG MANAGEMENT
     // ---
 
-    /// @inheritdoc IAdaptiveCurveIrm
-    function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams) external {
+    /// @inheritdoc IConfigurableIrm
+    function applyIrmConfig(MarketParams calldata marketParams, address config) external {
         _checkAuthorized();
 
+        AdaptiveCurveParams memory curveParams = IAdaptiveCurveConfig(config).getCurveParams();
         Id id = marketParams.id();
-        bytes32 curveParamsHash = keccak256(abi.encode(curveParams));
-
-        // The config validates `curveParams` in its constructor. Immutable configs are safely shareable, so
-        // identical params resolve to one deployment.
-        IAdaptiveCurveConfig config = deployedCurveConfigs[curveParamsHash];
-        if (address(config) == address(0)) {
-            config = new AdaptiveCurveConfig(curveParams);
-            deployedCurveConfigs[curveParamsHash] = config;
-            emit ConfigDeployed(curveParamsHash, address(config));
-        }
-
-        marketCurveConfig[id] = config;
+        marketCurveConfig[id] = IAdaptiveCurveConfig(config);
 
         // The saved rate must obey the new band immediately — adaptation alone would re-clamp it late or never.
         // 0 means the market was never priced: the first call seeds it, so it must stay 0.
@@ -97,7 +83,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
             rateAtTarget[id] = storedRate.bound(curveParams.minRateAtTarget, curveParams.maxRateAtTarget);
         }
 
-        emit MarketCurveParamsSet(id, address(config), curveParams);
+        emit IrmConfigApplied(id, config);
     }
 
     // ---

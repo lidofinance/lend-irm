@@ -11,10 +11,10 @@ interface IOwnerManager {
     /// @notice Emitted when `manager` is set.
     event ManagerSet(address indexed manager);
 
-    /// @notice Address allowed to rotate the roles (`transferOwnership`, `setManager`) and set params.
+    /// @notice Address of the owner.
     function owner() external view returns (address);
 
-    /// @notice Address allowed to set params (alongside `owner`).
+    /// @notice Address of the manager.
     function manager() external view returns (address);
 
     /// @notice Sets `owner` to `newOwner`. Owner only. Reverts on zero.

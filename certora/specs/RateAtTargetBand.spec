@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MIT
 
-// Fork invariant: the adapting state `rateAtTarget[id]` is kept within the market's band
+// For the linked immutable config, the adapting state `rateAtTarget[id]` is kept within the market's band
 // [minRateAtTarget, maxRateAtTarget]. Two rules: the inductive `borrowRate` step -- in band (or 0, the
 // uninitialized sentinel) before implies in band after -- and the setter's eager re-clamp, which restores the
 // inductive hypothesis whenever a reparametrization moves the band.
 //
-// The curve parameters live in a per-market AdaptiveCurveConfig that the IRM reads via an external `getCurveParams()` static
-// call. The spec links an AdaptiveCurveConfig (`Cfg`) and pins it as the config registered for the market via the native
-// `marketCurveConfig(id)` getter. The market id is derived from `marketParams` with the pure `Lib.toId` helper, which
-// computes the same `MarketParamsLib.id()` the contract computes internally. `_newRateAtTarget` is summarized to an
-// arbitrary value within [min, max] -- exactly the guarantee of its final `.bound(min, max)` -- so the rule checks
-// that the contract routes only in-band values into storage (first interaction -> initial, no adaptation ->
-// unchanged, adaptation -> bounded). `_curve` is NONDET (it feeds only the returned rate, not the stored state).
+// The curve parameters come from the config that the IRM reads via a `getCurveParams()` static call. The spec
+// includes one linked config (`Cfg`): the inductive rule pins it as the bound address, and the setter applies it
+// through the real `applyIrmConfig(MarketParams,address)` path. The market id is derived with the pure
+// `Lib.toId` helper, which computes the same `MarketParamsLib.id()` the contract computes internally.
+// `_newRateAtTarget` is summarized to an arbitrary value within [min, max] -- exactly the guarantee of its final
+// `.bound(min, max)` -- so the rule checks that only in-band values reach storage.
+// `_curve` is NONDET (it feeds only the returned rate, not the stored state).
 //
-// `validConfig()` assumes the invariants `AdaptiveCurveConfig`'s constructor (`_validateCurveParams`) guarantees but the Prover
-// does not model on the linked config's immutables. The market/elapsed bounds keep the inline WAD math from
-// overflowing, giving a reachable, non-reverting path.
+// The linked `AdaptiveCurveConfig` is immutable, so its parameters do not change within this proof.
+// `validConfig()` assumes they are valid; the IRM setter does not validate them. The market/elapsed bounds keep the
+// inline WAD math from overflowing, giving a reachable, non-reverting path.
 
 using AdaptiveCurveIrm as Irm;
 using AdaptiveCurveConfig as Cfg;
@@ -44,7 +44,7 @@ function inBand() returns int256 {
     return r;
 }
 
-// What AdaptiveCurveConfig's _validateCurveParams guarantees about the linked config's params.
+// Models the valid-parameter assumptions for the linked config.
 function validConfig() {
     AdaptiveCurveIrm.AdaptiveCurveParams cfg = Cfg.getCurveParams();
     require cfg.minRateAtTarget > 0;
@@ -58,7 +58,7 @@ function validConfig() {
 
 rule rateAtTargetStaysInBand(env e, AdaptiveCurveIrm.MarketParams marketParams, AdaptiveCurveIrm.Market market) {
     AdaptiveCurveIrm.Id id = Lib.toId(marketParams);
-    require Irm.marketCurveConfig(id) == Cfg;              // the registered config is the linked AdaptiveCurveConfig
+    require Irm.marketCurveConfig(id) == Cfg;              // the bound config is the linked config
     validConfig();
     AdaptiveCurveIrm.AdaptiveCurveParams cfg = Cfg.getCurveParams();
 
@@ -76,22 +76,18 @@ rule rateAtTargetStaysInBand(env e, AdaptiveCurveIrm.MarketParams marketParams, 
     assert afterVal >= cfg.minRateAtTarget && afterVal <= cfg.maxRateAtTarget;
 }
 
-// The setter's eager re-clamp: `setMarketCurveParams` pulls a non-zero stored rateAtTarget into the new band at the
-// swap itself and leaves the 0 sentinel alone (the first interaction seeds it). The well-formedness requires mirror
-// what `_validateCurveParams` guarantees for any params reachable through a config (the hash binds params to a
-// validated deployment, so an invalid cached config is unreachable).
-rule setterClampsRateIntoNewBand(
-    env e,
-    AdaptiveCurveIrm.MarketParams marketParams,
-    AdaptiveCurveIrm.AdaptiveCurveParams newParams
-) {
+// The setter reads and binds the linked config, clamps a non-zero stored rateAtTarget into the returned band, and
+// leaves the 0 sentinel alone. `validConfig()` is an assumption, not setter-side validation.
+rule setterClampsRateIntoNewBand(env e, AdaptiveCurveIrm.MarketParams marketParams) {
     AdaptiveCurveIrm.Id id = Lib.toId(marketParams);
     int256 before = Irm.rateAtTarget(id);
-    require newParams.minRateAtTarget > 0 && newParams.maxRateAtTarget >= newParams.minRateAtTarget;
+    validConfig();
+    AdaptiveCurveIrm.AdaptiveCurveParams newParams = Cfg.getCurveParams();
 
-    setMarketCurveParams(e, marketParams, newParams);
+    applyIrmConfig(e, marketParams, Cfg);
 
     int256 afterVal = Irm.rateAtTarget(id);
+    assert Irm.marketCurveConfig(id) == Cfg;
     assert before == 0 => afterVal == 0;
     assert before != 0 => (afterVal >= newParams.minRateAtTarget && afterVal <= newParams.maxRateAtTarget);
 }

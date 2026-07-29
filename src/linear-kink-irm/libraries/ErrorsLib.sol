@@ -11,6 +11,6 @@ library ErrorsLib {
     /// @dev Thrown when `optimalUtilization` is outside (0, WAD).
     string internal constant INVALID_OPTIMAL_UTILIZATION = "invalid optimalUtilization";
 
-    /// @dev Thrown when the peak rate (baseRate + slope1 + slope2) exceeds MAX_BORROW_RATE.
+    /// @dev Thrown when the peak rate (baseRate + slope1 + slope2) exceeds the config constructor's limit.
     string internal constant MAX_RATE_EXCEEDED = "max rate exceeded";
 }

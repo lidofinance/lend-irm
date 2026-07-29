@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
-import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
+import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
 import "../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
 
@@ -379,7 +379,7 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
         _register(address(irm), params, config);
     }
 
-    /// @dev Deploys the IRM with the test as morpho, owner, and manager, letting it call `setMarketCurveParams`.
+    /// @dev Deploys the IRM with the test as morpho, owner, and manager, letting it call `applyIrmConfig`.
     function _deployIrm() internal returns (AdaptiveCurveIrm deployed) {
         deployed = new AdaptiveCurveIrm(address(this), address(this), address(this));
     }
@@ -387,7 +387,8 @@ contract AdaptiveCurveIrmReparamTest is Test, CurveRefHelper {
     function _register(address irmAddress, MarketParams memory marketParams, AdaptiveCurveParams memory config)
         internal
     {
-        AdaptiveCurveIrm(irmAddress).setMarketCurveParams(marketParams, config);
+        AdaptiveCurveConfig deployedConfig = new AdaptiveCurveConfig(config);
+        AdaptiveCurveIrm(irmAddress).applyIrmConfig(marketParams, address(deployedConfig));
     }
 
     /// @dev A standalone IRM for `config` seeded to `seededRate` on the wired market — the "same curve, applied from

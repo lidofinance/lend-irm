@@ -2,18 +2,41 @@
 pragma solidity 0.8.35;
 
 import {LinearKinkIrm} from "../src/linear-kink-irm/LinearKinkIrm.sol";
+import {LinearKinkConfig} from "../src/linear-kink-irm/LinearKinkConfig.sol";
 import {LinearKinkParams} from "../src/linear-kink-irm/interfaces/ILinearKinkTypes.sol";
+import {AdaptiveCurveIrm} from "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
+import {IConfigurableIrm} from "../src/common/IConfigurableIrm.sol";
 import {ErrorsLib} from "../src/linear-kink-irm/libraries/ErrorsLib.sol";
 import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
 import {MarketParamsLib} from "../lib/lido-lend/src/libraries/MarketParamsLib.sol";
-import {Id, MarketParams, Market} from "../lib/lido-lend/src/interfaces/IMorpho.sol";
+import {MarketParams, Market} from "../lib/lido-lend/src/interfaces/IMorpho.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
+contract MockLinearKinkConfig {
+    LinearKinkParams internal kinkParams;
+
+    constructor(LinearKinkParams memory kinkParams_) {
+        kinkParams = kinkParams_;
+    }
+
+    function setKinkParams(LinearKinkParams memory kinkParams_) external {
+        kinkParams = kinkParams_;
+    }
+
+    function getKinkParams() external view returns (LinearKinkParams memory) {
+        return kinkParams;
+    }
+}
+
+contract WrongLinearKinkConfig {
+    function getKinkParams() external pure returns (bytes32) {
+        return bytes32(uint256(1));
+    }
+}
+
 contract LinearKinkIrmTest is Test {
     using MarketParamsLib for MarketParams;
-
-    uint256 internal constant WAD = 1e18;
 
     address internal owner = address(0xA11CE);
     address internal manager = address(0xB0B);
@@ -31,8 +54,7 @@ contract LinearKinkIrmTest is Test {
             irm: address(irm),
             lltv: 0.8 ether
         });
-        vm.prank(owner);
-        irm.setMarketKinkParams(marketParams, _defaultParams());
+        _applyIrmConfig(owner, marketParams, _defaultParams());
     }
 
     /* HELPERS */
@@ -45,6 +67,15 @@ contract LinearKinkIrmTest is Test {
         return LinearKinkParams({optimalUtilization: 0.9 ether, baseRate: 1e9, slope1: 4e9, slope2: 60e9});
     }
 
+    function _applyIrmConfig(address caller, MarketParams memory params, LinearKinkParams memory kinkParams)
+        internal
+        returns (LinearKinkConfig config)
+    {
+        config = new LinearKinkConfig(kinkParams);
+        vm.prank(caller);
+        irm.applyIrmConfig(params, address(config));
+    }
+
     function _market(uint256 supply, uint256 borrow) internal pure returns (Market memory m) {
         m.totalSupplyAssets = uint128(supply);
         m.totalBorrowAssets = uint128(borrow);
@@ -53,6 +84,14 @@ contract LinearKinkIrmTest is Test {
     function _otherMarket() internal view returns (MarketParams memory p) {
         p = marketParams;
         p.lltv = 0.5 ether; // different id, unconfigured
+    }
+
+    /* COMMON ABI */
+
+    function test_applyIrmConfigSelectorMatchesAdaptiveCurveIrm() public {
+        bytes4 expected = bytes4(keccak256("applyIrmConfig((address,address,address,address,uint256),address)"));
+        assertEq(LinearKinkIrm.applyIrmConfig.selector, expected);
+        assertEq(AdaptiveCurveIrm.applyIrmConfig.selector, expected);
     }
 
     /* RATE CURVE */
@@ -100,8 +139,7 @@ contract LinearKinkIrmTest is Test {
         MarketParams memory other = _otherMarket();
         LinearKinkParams memory p = _defaultParams();
         p.baseRate = 7e9;
-        vm.prank(owner);
-        irm.setMarketKinkParams(other, p);
+        _applyIrmConfig(owner, other, p);
 
         assertEq(irm.borrowRateView(marketParams, _market(1e18, 0)), 1e9);
         assertEq(irm.borrowRateView(other, _market(1e18, 0)), 7e9);
@@ -134,53 +172,123 @@ contract LinearKinkIrmTest is Test {
         irm.borrowRateView(_otherMarket(), _market(1e18, 0.5 ether));
     }
 
-    /* VALIDATION */
+    /* CONFIG ABI AND SNAPSHOT */
 
-    function test_setRevertsOnZeroOptimalUtilization() public {
-        LinearKinkParams memory p = _defaultParams();
-        p.optimalUtilization = 0;
+    function test_applyIrmConfig_revertsForZeroAddress() public {
         vm.prank(owner);
-        vm.expectRevert(bytes(ErrorsLib.INVALID_OPTIMAL_UTILIZATION));
-        irm.setMarketKinkParams(_otherMarket(), p);
+        vm.expectRevert();
+        irm.applyIrmConfig(_otherMarket(), address(0));
     }
 
-    function test_setRevertsOnFullOptimalUtilization() public {
-        LinearKinkParams memory p = _defaultParams();
-        p.optimalUtilization = uint64(WAD);
+    function test_applyIrmConfig_revertsForEoa() public {
+        address eoa = address(0xC0FFEE);
+        assertEq(eoa.code.length, 0);
+
         vm.prank(owner);
-        vm.expectRevert(bytes(ErrorsLib.INVALID_OPTIMAL_UTILIZATION));
-        irm.setMarketKinkParams(_otherMarket(), p);
+        vm.expectRevert();
+        irm.applyIrmConfig(_otherMarket(), eoa);
     }
 
-    function test_setRevertsWhenPeakRateExceedsMax() public {
-        LinearKinkParams memory p = _defaultParams();
-        p.slope2 = uint64(irm.MAX_BORROW_RATE()); // base + slope1 + slope2 > MAX
+    function test_applyIrmConfig_revertsWhenConfigCodeWasRemoved() public {
+        LinearKinkConfig config = new LinearKinkConfig(_defaultParams());
+        vm.etch(address(config), bytes(""));
+        assertEq(address(config).code.length, 0);
+
         vm.prank(owner);
-        vm.expectRevert(bytes(ErrorsLib.MAX_RATE_EXCEEDED));
-        irm.setMarketKinkParams(_otherMarket(), p);
+        vm.expectRevert();
+        irm.applyIrmConfig(_otherMarket(), address(config));
+    }
+
+    function test_applyIrmConfig_revertsForWrongConfigType() public {
+        WrongLinearKinkConfig config = new WrongLinearKinkConfig();
+
+        vm.prank(owner);
+        vm.expectRevert();
+        irm.applyIrmConfig(_otherMarket(), address(config));
+    }
+
+    function test_applyIrmConfig_copiesParamsAndEmitsConfig() public {
+        MarketParams memory other = _otherMarket();
+        LinearKinkParams memory p = _defaultParams();
+        p.baseRate = 7e9;
+        LinearKinkConfig config = new LinearKinkConfig(p);
+
+        vm.expectEmit(true, true, false, true, address(irm));
+        emit IConfigurableIrm.IrmConfigApplied(other.id(), address(config));
+        vm.prank(owner);
+        irm.applyIrmConfig(other, address(config));
+
+        (uint64 optU, uint64 base, uint64 s1, uint64 s2) = irm.marketKinkParams(other.id());
+        assertEq(optU, p.optimalUtilization);
+        assertEq(base, p.baseRate);
+        assertEq(s1, p.slope1);
+        assertEq(s2, p.slope2);
+    }
+
+    function test_rateCalculationUsesCopiedParamsNotConfig() public {
+        MarketParams memory other = _otherMarket();
+        LinearKinkParams memory applied = _defaultParams();
+        applied.baseRate = 2e9;
+        MockLinearKinkConfig config = new MockLinearKinkConfig(applied);
+
+        vm.prank(owner);
+        irm.applyIrmConfig(other, address(config));
+
+        LinearKinkParams memory changed = LinearKinkParams({
+            optimalUtilization: applied.optimalUtilization, baseRate: 8e9, slope1: 9e9, slope2: 10e9
+        });
+        config.setKinkParams(changed);
+
+        assertEq(irm.borrowRateView(other, _market(1e18, 0)), applied.baseRate);
+        assertEq(
+            irm.borrowRateView(other, _market(1e18, 1e18)), uint256(applied.baseRate) + applied.slope1 + applied.slope2
+        );
+
+        (uint64 optU, uint64 base, uint64 s1, uint64 s2) = irm.marketKinkParams(other.id());
+        assertEq(optU, applied.optimalUtilization);
+        assertEq(base, applied.baseRate);
+        assertEq(s1, applied.slope1);
+        assertEq(s2, applied.slope2);
+    }
+
+    /* NO SETTER-SIDE VALUE VALIDATION */
+
+    function test_applyIrmConfig_doesNotValidateReturnedValues() public {
+        MarketParams memory other = _otherMarket();
+        LinearKinkParams memory p = _defaultParams();
+        p.slope2 = type(uint64).max; // Invalid under the documented peak-rate invariant.
+        MockLinearKinkConfig config = new MockLinearKinkConfig(p);
+
+        vm.prank(owner);
+        irm.applyIrmConfig(other, address(config));
+
+        (uint64 optU, uint64 base, uint64 s1, uint64 s2) = irm.marketKinkParams(other.id());
+        assertEq(optU, p.optimalUtilization);
+        assertEq(base, p.baseRate);
+        assertEq(s1, p.slope1);
+        assertEq(s2, p.slope2);
     }
 
     /* AUTHORIZATION & REPARAMETRIZATION */
 
-    function test_setMarketKinkParams_unauthorizedReverts() public {
+    function test_applyIrmConfig_unauthorizedReverts() public {
+        LinearKinkConfig config = new LinearKinkConfig(_defaultParams());
         vm.prank(outsider);
         vm.expectRevert(bytes(OwnerManagerErrors.NOT_AUTHORIZED));
-        irm.setMarketKinkParams(_otherMarket(), _defaultParams());
+        irm.applyIrmConfig(_otherMarket(), address(config));
     }
 
-    function test_setMarketKinkParams_managerCanSet() public {
+    function test_applyIrmConfig_managerCanApply() public {
         MarketParams memory other = _otherMarket();
-        vm.prank(manager);
-        irm.setMarketKinkParams(other, _defaultParams());
+        _applyIrmConfig(manager, other, _defaultParams());
         (uint64 optU,,,) = irm.marketKinkParams(other.id());
         assertTrue(optU != 0);
     }
 
-    function test_setMarketKinkParams_reparametrizesInPlace() public {
+    function test_applyIrmConfig_reparametrizesInPlace() public {
         LinearKinkParams memory p = _defaultParams();
         p.baseRate = 2e9;
-        vm.prank(manager);
-        irm.setMarketKinkParams(marketParams, p);
+        _applyIrmConfig(manager, marketParams, p);
         assertEq(irm.borrowRateView(marketParams, _market(1e18, 0)), 2e9);
     }
 
