@@ -3,15 +3,37 @@ pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
 import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig.sol";
-import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
+import {ExpLib} from "../src/adaptive-curve-irm/libraries/ExpLib.sol";
+import {MathLib, WAD_INT as WAD} from "../src/adaptive-curve-irm/libraries/MathLib.sol";
+import {UtilsLib} from "../src/adaptive-curve-irm/libraries/UtilsLib.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
 import {IOwnerManager} from "../src/common/IOwnerManager.sol";
+import {MarketParamsLib} from "../lib/lido-lend/src/libraries/MarketParamsLib.sol";
+import {MathLib as MorphoMathLib} from "../lib/lido-lend/src/libraries/MathLib.sol";
 
 import "../lib/forge-std/src/Test.sol";
 
 import {CurveRefHelper} from "./CurveRefHelper.sol";
+
+contract MutableAdaptiveCurveConfigMock {
+    AdaptiveCurveParams internal curveParams;
+
+    constructor(AdaptiveCurveParams memory curveParams_) {
+        curveParams = curveParams_;
+    }
+
+    function setReturnedCurveParams(AdaptiveCurveParams memory curveParams_) external {
+        curveParams = curveParams_;
+    }
+
+    function getCurveParams() external view returns (AdaptiveCurveParams memory) {
+        return curveParams;
+    }
+}
+
+contract WrongAdaptiveCurveConfigMock {}
 
 contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     using MathLib for int256;
@@ -22,6 +44,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     using MarketParamsLib for MarketParams;
 
     event BorrowRateUpdate(Id indexed id, uint256 avgBorrowRate, uint256 rateAtTarget);
+    event IrmConfigApplied(Id indexed marketId, address indexed config);
 
     IAdaptiveCurveIrm internal irm;
     MarketParams internal marketParams = MarketParams({
@@ -31,7 +54,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     function setUp() public {
         // router == owner == address(this): the test is both the trusted caller and the owner (sets configs).
         irm = _newIrm();
-        _setConfig(address(irm), marketParams, _defaultConfig());
+        _applyIrmConfig(address(irm), marketParams, _defaultConfig());
         vm.warp(90 days);
 
         bytes4[] memory selectors = new bytes4[](1);
@@ -424,16 +447,17 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         irm.borrowRateView(marketParams, market);
     }
 
-    /// setMarketCurveParams is owner-or-manager only; an outsider is rejected with NOT_AUTHORIZED.
-    function testSetConfigOnlyOwner(address caller) public {
+    /// applyIrmConfig is owner-or-manager only; an outsider is rejected with NOT_AUTHORIZED.
+    function testApplyIrmConfigOnlyOwnerOrManager(address caller) public {
         vm.assume(caller != address(this)); // address(this) is owner and manager (set in setUp)
+        AdaptiveCurveConfig config = new AdaptiveCurveConfig(_defaultConfig());
         vm.prank(caller);
         vm.expectRevert(bytes(OwnerManagerErrors.NOT_AUTHORIZED));
-        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(marketParams, _defaultConfig());
+        AdaptiveCurveIrm(address(irm)).applyIrmConfig(marketParams, address(config));
     }
 
     /// transferOwnership immediately moves ownership: the old owner loses the owner-only powers, the new owner gains
-    /// them. (setMarketCurveParams is not owner-exclusive — the old owner keeps it while still the manager — so the
+    /// them. (applyIrmConfig is not owner-exclusive — the old owner keeps it while still the manager — so the
     /// owner-only power checked here is setManager.)
     function testTransferOwnership() public {
         address newOwner = makeAddr("newOwner");
@@ -497,16 +521,17 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         irm_.transferOwnership(newOwner);
     }
 
-    /// A manager distinct from the owner can set market curve params but cannot rotate either role.
+    /// A manager distinct from the owner can set a market config but cannot rotate either role.
     function testManagerRoleSeparation() public {
         address manager_ = makeAddr("manager");
         AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(this), address(this), manager_);
+        AdaptiveCurveConfig config = new AdaptiveCurveConfig(_defaultConfig());
 
         MarketParams memory params;
         params.irm = address(fresh);
 
         vm.prank(manager_);
-        fresh.setMarketCurveParams(params, _defaultConfig());
+        fresh.applyIrmConfig(params, address(config));
         assertTrue(address(fresh.marketCurveConfig(params.id())) != address(0), "manager set the market's config");
 
         vm.prank(manager_);
@@ -518,82 +543,75 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         fresh.transferOwnership(manager_);
     }
 
-    /// setMarketCurveParams emits MarketCurveParamsSet on every set, and ConfigDeployed only on the first
-    /// deploy of a parameter set: identical params share one config across markets, different params get their own.
-    function testSetMarketCurveParamsDeduplicatesConfigs() public {
-        // Distinct from the setUp default, whose config is already deployed and cached.
-        AdaptiveCurveParams memory config = _defaultConfig();
-        config.adjustmentSpeed = config.adjustmentSpeed + 1;
-        bytes32 paramsHash = keccak256(abi.encode(config));
+    /// applyIrmConfig binds exactly the supplied config and emits the shared event.
+    function testApplyIrmConfigBindsSuppliedConfigAndEmits() public {
+        AdaptiveCurveParams memory curveParams = _defaultConfig();
+        curveParams.curveSteepness += 1;
+        AdaptiveCurveConfig config = new AdaptiveCurveConfig(curveParams);
 
-        MarketParams memory paramsA = marketParams;
-        paramsA.loanToken = address(0xAAAA);
-        MarketParams memory paramsB = marketParams;
-        paramsB.loanToken = address(0xBBBB);
+        MarketParams memory params = marketParams;
+        params.loanToken = address(0xAAAA);
 
-        // First set deploys: ConfigDeployed (address unknown upfront: check the hash topic only), then the bind.
-        vm.expectEmit(true, false, false, false, address(irm));
-        emit IAdaptiveCurveIrm.ConfigDeployed(paramsHash, address(0));
-        vm.expectEmit(true, false, false, true, address(irm));
-        emit IAdaptiveCurveIrm.MarketCurveParamsSet(paramsA.id(), address(0), config);
-        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsA, config);
+        vm.expectEmit(true, true, true, true, address(irm));
+        emit IrmConfigApplied(params.id(), address(config));
+        AdaptiveCurveIrm(address(irm)).applyIrmConfig(params, address(config));
 
-        address configA = address(irm.marketCurveConfig(paramsA.id()));
-        assertEq(address(AdaptiveCurveIrm(address(irm)).deployedCurveConfigs(paramsHash)), configA, "cache filled");
-
-        // Second set with identical params: NO second ConfigDeployed, the bind reuses the cached address.
-        vm.recordLogs();
-        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsB, config);
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        assertEq(logs.length, 1, "only the bind event on a dedup hit");
-        assertEq(logs[0].topics[0], IAdaptiveCurveIrm.MarketCurveParamsSet.selector, "the bind event");
-        assertEq(address(irm.marketCurveConfig(paramsB.id())), configA, "identical params share one config");
-
-        // Different params deploy their own config.
-        AdaptiveCurveParams memory otherConfig = _defaultConfig();
-        otherConfig.curveSteepness = otherConfig.curveSteepness + 1;
-        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsB, otherConfig);
-        assertTrue(address(irm.marketCurveConfig(paramsB.id())) != configA, "different params get their own config");
+        assertEq(address(irm.marketCurveConfig(params.id())), address(config), "supplied config bound exactly");
+        Market memory market = _market(1 ether, uint256(curveParams.targetUtilization));
+        assertEq(irm.borrowRateView(params, market), uint256(curveParams.initialRateAtTarget), "bound config prices");
     }
 
-    /// Registry self-consistency: after sets and reparams, every market's config is exactly the cached config
-    /// for its own params (`marketCurveConfig[id] == deployedCurveConfigs[keccak256(abi.encode(params))]`).
-    function testConfigRegistryRoundTrips() public {
-        MarketParams memory paramsA = marketParams;
-        paramsA.loanToken = address(0xAAAA);
-        MarketParams memory paramsB = marketParams;
-        paramsB.loanToken = address(0xBBBB);
+    /// Zero and EOA config addresses return no ABI-decodable config data and are rejected.
+    function testApplyIrmConfigRejectsZeroAndEoa() public {
+        AdaptiveCurveIrm fresh = _newIrm();
 
-        AdaptiveCurveParams memory sharedConfig = _defaultConfig();
-        AdaptiveCurveParams memory otherConfig = _defaultConfig();
-        otherConfig.curveSteepness = otherConfig.curveSteepness + 1;
+        vm.expectRevert();
+        fresh.applyIrmConfig(marketParams, address(0));
 
-        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsA, sharedConfig);
-        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsB, sharedConfig);
-        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(paramsB, otherConfig); // reparam
-
-        _assertRegistryRoundTrip(paramsA.id());
-        _assertRegistryRoundTrip(paramsB.id());
+        vm.expectRevert();
+        fresh.applyIrmConfig(marketParams, makeAddr("eoa config"));
     }
 
-    /// @dev The market's config resolves back to itself through the dedup cache keyed by its own params.
-    function _assertRegistryRoundTrip(Id id) internal {
-        IAdaptiveCurveConfig config = irm.marketCurveConfig(id);
-        bytes32 paramsHash = keccak256(abi.encode(config.getCurveParams()));
-        assertEq(
-            address(AdaptiveCurveIrm(address(irm)).deployedCurveConfigs(paramsHash)),
-            address(config),
-            "market config == cached config for its params"
-        );
+    /// A contract exposing a different config ABI cannot be used as the config.
+    function testApplyIrmConfigRejectsWrongConfigType() public {
+        AdaptiveCurveIrm fresh = _newIrm();
+        WrongAdaptiveCurveConfigMock wrongConfig = new WrongAdaptiveCurveConfigMock();
+
+        vm.expectRevert();
+        fresh.applyIrmConfig(marketParams, address(wrongConfig));
     }
 
-    /// setMarketCurveParams deploys a config from params, sets it, and the market prices.
-    function testSetConfigDeploysAndPrices() public {
-        AdaptiveCurveIrm(address(irm)).setMarketCurveParams(marketParams, _defaultConfig());
+    /// applyIrmConfig accepts ABI-decodable returned values without validating them.
+    function testApplyIrmConfigDoesNotValidateReturnedValues() public {
+        AdaptiveCurveParams memory curveParams = _defaultConfig();
+        curveParams.adjustmentSpeed = -1; // Intentionally invalid, but ABI-decodable.
+        MutableAdaptiveCurveConfigMock config = new MutableAdaptiveCurveConfigMock(curveParams);
 
-        assertTrue(address(irm.marketCurveConfig(marketParams.id())) != address(0), "config set");
-        Market memory market = _market(1 ether, uint256(ConstantsLib.TARGET_UTILIZATION));
-        assertEq(irm.borrowRateView(marketParams, market), uint256(ConstantsLib.INITIAL_RATE_AT_TARGET), "it prices");
+        vm.expectEmit(true, true, true, true, address(irm));
+        emit IrmConfigApplied(marketParams.id(), address(config));
+        AdaptiveCurveIrm(address(irm)).applyIrmConfig(marketParams, address(config));
+
+        assertEq(address(irm.marketCurveConfig(marketParams.id())), address(config), "config binding stored");
+        assertEq(irm.rateAtTarget(marketParams.id()), 0, "zero sentinel remains unchanged");
+    }
+
+    /// Rate calculation reads the selected config at runtime. The mutable mock changes its valid return to prove the
+    /// live read.
+    function testBorrowRateReadsSelectedConfigAtRuntime() public {
+        AdaptiveCurveParams memory curveParams = _defaultConfig();
+        MutableAdaptiveCurveConfigMock config = new MutableAdaptiveCurveConfigMock(curveParams);
+        AdaptiveCurveIrm fresh = _newIrm();
+        fresh.applyIrmConfig(marketParams, address(config));
+
+        Market memory market = _market(1 ether, 1 ether);
+        (uint256 expectedBefore,) = _refBorrowRate(curveParams, 0, market);
+        assertEq(fresh.borrowRateView(marketParams, market), expectedBefore, "reads initially selected params");
+
+        curveParams.curveSteepness = WAD;
+        config.setReturnedCurveParams(curveParams);
+        (uint256 expectedAfter,) = _refBorrowRate(curveParams, 0, market);
+        assertEq(fresh.borrowRateView(marketParams, market), expectedAfter, "reads config again at rate calculation");
+        assertEq(address(fresh.marketCurveConfig(marketParams.id())), address(config), "binding address is unchanged");
     }
 
     /* ---- Borrow-rate cap ---- */
@@ -605,7 +623,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         uint256 curveTip = uint256(ConstantsLib.INITIAL_RATE_AT_TARGET.wMulToZero(ConstantsLib.CURVE_STEEPNESS));
         config.maxBorrowRate = curveTip / 2; // cap below the tip
         AdaptiveCurveIrm capped = _newIrm();
-        _setConfig(address(capped), marketParams, config);
+        _applyIrmConfig(address(capped), marketParams, config);
 
         Market memory market;
         market.totalBorrowAssets = 1 ether;
@@ -621,7 +639,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         AdaptiveCurveParams memory config = _defaultConfig();
         config.maxBorrowRate = uint256(ConstantsLib.INITIAL_RATE_AT_TARGET); // well below the high-util tip
         AdaptiveCurveIrm capped = _newIrm();
-        _setConfig(address(capped), marketParams, config);
+        _applyIrmConfig(address(capped), marketParams, config);
 
         Market memory market;
         market.totalSupplyAssets = 1 ether;
@@ -654,8 +672,8 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         assertTrue(Id.unwrap(idUp) != Id.unwrap(idDown), "distinct ids");
 
         // Both markets share the default curve, registered independently per id.
-        _setConfig(address(irm), paramsUp, _defaultConfig());
-        _setConfig(address(irm), paramsDown, _defaultConfig());
+        _applyIrmConfig(address(irm), paramsUp, _defaultConfig());
+        _applyIrmConfig(address(irm), paramsDown, _defaultConfig());
 
         // Seed both at target -> both at INITIAL_RATE_AT_TARGET.
         irm.borrowRate(paramsUp, _market(1 ether, 0.9 ether));
@@ -867,14 +885,14 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         irm_ = new AdaptiveCurveIrm(address(this), address(this), address(this));
     }
 
-    /// @dev Points `irm_` at a config deployed from `config` for `params` (the test is owner/manager). Takes full
-    /// MarketParams because setMarketCurveParams derives the id from them.
-    function _setConfig(address irm_, MarketParams memory params, AdaptiveCurveParams memory config)
+    /// @dev Creates a validated config and points `irm_` at it for `params` (the test is owner/manager).
+    /// Takes full MarketParams because applyIrmConfig derives the id from them.
+    function _applyIrmConfig(address irm_, MarketParams memory params, AdaptiveCurveParams memory config)
         internal
         returns (address configAddress)
     {
-        AdaptiveCurveIrm(irm_).setMarketCurveParams(params, config);
-        configAddress = address(AdaptiveCurveIrm(irm_).marketCurveConfig(params.id()));
+        configAddress = address(new AdaptiveCurveConfig(config));
+        AdaptiveCurveIrm(irm_).applyIrmConfig(params, configAddress);
     }
 
     /// @dev Spins up an IRM for `config` and the `MarketParams` that addresses it (the id is derived from it),
@@ -885,7 +903,7 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
     {
         irm_ = _newIrm();
         deployedParams.irm = address(irm_);
-        _setConfig(address(irm_), deployedParams, config);
+        _applyIrmConfig(address(irm_), deployedParams, config);
     }
 
     /// @dev Squeezes a fuzzed market into the valid domain (positive debt, utilization <= 1) in place, instead of

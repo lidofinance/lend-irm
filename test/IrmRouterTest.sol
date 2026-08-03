@@ -4,9 +4,11 @@ pragma solidity ^0.8.0;
 import {IrmRouter} from "../src/irm-router/IrmRouter.sol";
 import {ErrorsLib as RouterErrorsLib} from "../src/irm-router/libraries/ErrorsLib.sol";
 import {LinearKinkIrm} from "../src/linear-kink-irm/LinearKinkIrm.sol";
+import {LinearKinkConfig} from "../src/linear-kink-irm/LinearKinkConfig.sol";
 import {LinearKinkParams} from "../src/linear-kink-irm/interfaces/ILinearKinkTypes.sol";
 import {ErrorsLib as KinkErrorsLib} from "../src/linear-kink-irm/libraries/ErrorsLib.sol";
 import {AdaptiveCurveIrm} from "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
+import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
 import {ErrorsLib as AdaptiveErrorsLib} from "../src/adaptive-curve-irm/libraries/ErrorsLib.sol";
 import {OwnerManagerErrors} from "../src/common/OwnerManagerErrors.sol";
@@ -235,8 +237,9 @@ contract IrmRouterTest is Test {
     /// caught by the live-market probe, and pre-creation by createMarket's own ping.
     function test_setMarketIrm_probeCatchesWrongRouterGate() public {
         AdaptiveCurveIrm wrongGate = new AdaptiveCurveIrm(address(mock), owner, manager);
+        AdaptiveCurveConfig config = new AdaptiveCurveConfig(_adaptiveConfig());
         vm.prank(manager);
-        wrongGate.setMarketCurveParams(marketParams, _adaptiveConfig());
+        wrongGate.applyIrmConfig(marketParams, address(config));
 
         // Pre-creation: routing succeeds (no probe), the createMarket ping catches the wrong gate and creates nothing.
         _route(wrongGate);
@@ -416,8 +419,9 @@ contract IrmRouterTest is Test {
         AdaptiveCurveIrm fresh = new AdaptiveCurveIrm(address(router), owner, manager);
         AdaptiveCurveParams memory cfg = _adaptiveConfig();
         cfg.initialRateAtTarget = snapshot;
+        AdaptiveCurveConfig config = new AdaptiveCurveConfig(cfg);
         vm.prank(manager);
-        fresh.setMarketCurveParams(marketParams, cfg);
+        fresh.applyIrmConfig(marketParams, address(config));
 
         _route(fresh);
 
@@ -428,16 +432,18 @@ contract IrmRouterTest is Test {
 
     /// @dev The LinearKinkIrmTest default curve: kink at 90%, base 1e9, slopes 4e9/60e9 (per second, WAD-scaled).
     function _configureKink() internal {
-        vm.prank(manager);
-        kink.setMarketKinkParams(
-            marketParams, LinearKinkParams({optimalUtilization: 0.9 ether, baseRate: 1e9, slope1: 4e9, slope2: 60e9})
+        LinearKinkConfig config = new LinearKinkConfig(
+            LinearKinkParams({optimalUtilization: 0.9 ether, baseRate: 1e9, slope1: 4e9, slope2: 60e9})
         );
+        vm.prank(manager);
+        kink.applyIrmConfig(marketParams, address(config));
     }
 
     /// @dev Registers the default adaptive curve for the wired market on `irm_`.
     function _configureAdaptive(AdaptiveCurveIrm irm_) internal {
+        AdaptiveCurveConfig config = new AdaptiveCurveConfig(_adaptiveConfig());
         vm.prank(manager);
-        irm_.setMarketCurveParams(marketParams, _adaptiveConfig());
+        irm_.applyIrmConfig(marketParams, address(config));
     }
 
     /// @dev The upstream default adaptive config, cap off.

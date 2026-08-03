@@ -2,8 +2,9 @@
 pragma solidity ^0.8.0;
 
 import "../src/adaptive-curve-irm/AdaptiveCurveIrm.sol";
-import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
+import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
+import {WAD_INT as WAD} from "../src/adaptive-curve-irm/libraries/MathLib.sol";
 import {ConstantsLib} from "./ConstantsLib.sol";
 import "../src/adaptive-curve-irm/libraries/periphery/AdaptiveCurveIrmLib.sol";
 import "../lib/lido-lend/src/interfaces/IMorpho.sol";
@@ -14,7 +15,6 @@ import "../lib/forge-std/src/Test.sol";
 contract AdaptiveCurveIrmLibTest is Test {
     using MarketParamsLib for MarketParams;
     using stdStorage for StdStorage;
-    using MathLib for uint256;
 
     address public adaptiveCurveIrm;
 
@@ -40,11 +40,12 @@ contract AdaptiveCurveIrmLibTest is Test {
         });
     }
 
-    /// @dev Points `irmAddress` at it for `marketParams.id()` (the IRM deploys/dedups the config itself).
+    /// @dev Creates a validated config and points `irmAddress` at it for `marketParams.id()`.
     function _register(address irmAddress, MarketParams memory marketParams, AdaptiveCurveParams memory config)
         internal
     {
-        AdaptiveCurveIrm(irmAddress).setMarketCurveParams(marketParams, config);
+        AdaptiveCurveConfig deployedConfig = new AdaptiveCurveConfig(config);
+        AdaptiveCurveIrm(irmAddress).applyIrmConfig(marketParams, address(deployedConfig));
     }
 
     function testExpectedMarketBalances(

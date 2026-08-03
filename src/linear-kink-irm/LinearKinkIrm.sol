@@ -3,8 +3,10 @@ pragma solidity 0.8.35;
 
 import {IIrm} from "../../lib/lido-lend/src/interfaces/IIrm.sol";
 import {ILinearKinkIrm} from "./interfaces/ILinearKinkIrm.sol";
+import {ILinearKinkConfig} from "./interfaces/ILinearKinkConfig.sol";
 import {LinearKinkParams} from "./interfaces/ILinearKinkTypes.sol";
 import {OwnerManagerBase} from "../common/OwnerManagerBase.sol";
+import {IConfigurableIrm} from "../common/IConfigurableIrm.sol";
 
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
 import {MarketParamsLib} from "../../lib/lido-lend/src/libraries/MarketParamsLib.sol";
@@ -19,14 +21,6 @@ import {MathLib, WAD} from "../../lib/lido-lend/src/libraries/MathLib.sol";
 contract LinearKinkIrm is ILinearKinkIrm, OwnerManagerBase {
     using MathLib for uint256;
     using MarketParamsLib for MarketParams;
-
-    // ---
-    // CONSTANTS
-    // ---
-
-    /// @notice Maximum peak rate (baseRate + slope1 + slope2, reached at full utilization) = 800%/year (WAD-scaled,
-    /// per second). Also keeps the rate math from overflowing and lets every field fit in `uint64`.
-    uint256 public constant MAX_BORROW_RATE = 8.0 ether / uint256(365 days);
 
     // ---
     // STORAGE
@@ -48,20 +42,16 @@ contract LinearKinkIrm is ILinearKinkIrm, OwnerManagerBase {
     // CONFIG MANAGEMENT
     // ---
 
-    /// @inheritdoc ILinearKinkIrm
-    function setMarketKinkParams(MarketParams memory marketParams, LinearKinkParams calldata params) external {
+    /// @inheritdoc IConfigurableIrm
+    function applyIrmConfig(MarketParams calldata marketParams, address config) external {
         _checkAuthorized();
 
-        require(params.optimalUtilization > 0, ErrorsLib.INVALID_OPTIMAL_UTILIZATION);
-        require(params.optimalUtilization < WAD, ErrorsLib.INVALID_OPTIMAL_UTILIZATION);
-        require(
-            uint256(params.baseRate) + params.slope1 + params.slope2 <= MAX_BORROW_RATE, ErrorsLib.MAX_RATE_EXCEEDED
-        );
+        LinearKinkParams memory params = ILinearKinkConfig(config).getKinkParams();
 
         Id id = marketParams.id();
         marketKinkParams[id] = params;
 
-        emit MarketKinkParamsSet(id, params);
+        emit IrmConfigApplied(id, config);
     }
 
     // ---

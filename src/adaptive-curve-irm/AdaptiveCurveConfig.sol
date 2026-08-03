@@ -8,8 +8,7 @@ import {WAD_INT as WAD} from "./libraries/MathLib.sol";
 
 /// @title AdaptiveCurveConfig
 /// @author Lido.
-/// @notice Immutable holder of one curve's parameters, validated at construction. The AdaptiveCurveIrm deploys one
-/// per unique parameter set and prices its markets from it.
+/// @notice Immutable holder of one curve's parameters, validated at construction.
 contract AdaptiveCurveConfig is IAdaptiveCurveConfig {
     /* IMMUTABLES */
 

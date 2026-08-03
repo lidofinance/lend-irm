@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 import {AdaptiveCurveConfig} from "../src/adaptive-curve-irm/AdaptiveCurveConfig.sol";
-import {IAdaptiveCurveConfig} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "../src/adaptive-curve-irm/interfaces/IAdaptiveCurveTypes.sol";
 import {ErrorsLib} from "../src/adaptive-curve-irm/libraries/ErrorsLib.sol";
 import {WAD_INT as WAD} from "../src/adaptive-curve-irm/libraries/MathLib.sol";

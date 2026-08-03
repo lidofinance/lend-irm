@@ -5,27 +5,22 @@ import {IIrm} from "../../lib/lido-lend/src/interfaces/IIrm.sol";
 import {IAdaptiveCurveIrm} from "./interfaces/IAdaptiveCurveIrm.sol";
 import {IAdaptiveCurveConfig} from "./interfaces/IAdaptiveCurveConfig.sol";
 import {AdaptiveCurveParams} from "./interfaces/IAdaptiveCurveTypes.sol";
-import {AdaptiveCurveConfig} from "./AdaptiveCurveConfig.sol";
+import {IConfigurableIrm} from "../common/IConfigurableIrm.sol";
 import {OwnerManagerBase} from "../common/OwnerManagerBase.sol";
 import {OwnerManagerErrors} from "../common/OwnerManagerErrors.sol";
 
+import {AdaptiveCurveMathLib} from "./libraries/AdaptiveCurveMathLib.sol";
 import {UtilsLib} from "./libraries/UtilsLib.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
-import {ExpLib} from "./libraries/ExpLib.sol";
-import {MathLib, WAD_INT as WAD} from "./libraries/MathLib.sol";
 import {MarketParamsLib} from "../../lib/lido-lend/src/libraries/MarketParamsLib.sol";
 import {Id, MarketParams, Market} from "../../lib/lido-lend/src/interfaces/IMorpho.sol";
-import {MathLib as MorphoMathLib} from "../../lib/lido-lend/src/libraries/MathLib.sol";
 
 /// @title AdaptiveCurveIrm
 /// @author Morpho Labs. Modified by Lido.
-/// @notice One immutable instance serves many markets keyed by `Id`: each market points at an immutable
-/// AdaptiveCurveConfig (deployed and deduplicated here) and keeps its own adapting `rateAtTarget`. The curve and its
-/// adaptation keep the upstream formulas, parameterized per market. Meant to sit behind IrmRouter.
+/// @notice One immutable instance serves many markets keyed by `Id`, each with a config contract and an adapting
+/// `rateAtTarget`. It uses the upstream curve and adaptation formulas and is intended to sit behind IrmRouter.
 contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
-    using MathLib for int256;
     using UtilsLib for int256;
-    using MorphoMathLib for uint128;
     using MarketParamsLib for MarketParams;
 
     // ---
@@ -52,9 +47,6 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     /// @inheritdoc IAdaptiveCurveIrm
     mapping(Id => IAdaptiveCurveConfig) public marketCurveConfig;
 
-    /// @inheritdoc IAdaptiveCurveIrm
-    mapping(bytes32 => IAdaptiveCurveConfig) public deployedCurveConfigs;
-
     // ---
     // CONSTRUCTOR
     // ---
@@ -72,23 +64,13 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
     // CONFIG MANAGEMENT
     // ---
 
-    /// @inheritdoc IAdaptiveCurveIrm
-    function setMarketCurveParams(MarketParams memory marketParams, AdaptiveCurveParams calldata curveParams) external {
+    /// @inheritdoc IConfigurableIrm
+    function applyIrmConfig(MarketParams calldata marketParams, address config) external {
         _checkAuthorized();
 
+        AdaptiveCurveParams memory curveParams = IAdaptiveCurveConfig(config).getCurveParams();
         Id id = marketParams.id();
-        bytes32 curveParamsHash = keccak256(abi.encode(curveParams));
-
-        // The config validates `curveParams` in its constructor. Immutable configs are safely shareable, so
-        // identical params resolve to one deployment.
-        IAdaptiveCurveConfig config = deployedCurveConfigs[curveParamsHash];
-        if (address(config) == address(0)) {
-            config = new AdaptiveCurveConfig(curveParams);
-            deployedCurveConfigs[curveParamsHash] = config;
-            emit ConfigDeployed(curveParamsHash, address(config));
-        }
-
-        marketCurveConfig[id] = config;
+        marketCurveConfig[id] = IAdaptiveCurveConfig(config);
 
         // The saved rate must obey the new band immediately — adaptation alone would re-clamp it late or never.
         // 0 means the market was never priced: the first call seeds it, so it must stay 0.
@@ -97,7 +79,7 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
             rateAtTarget[id] = storedRate.bound(curveParams.minRateAtTarget, curveParams.maxRateAtTarget);
         }
 
-        emit MarketCurveParamsSet(id, address(config), curveParams);
+        emit IrmConfigApplied(id, config);
     }
 
     // ---
@@ -133,87 +115,6 @@ contract AdaptiveCurveIrm is IAdaptiveCurveIrm, OwnerManagerBase {
         require(address(curveConfig) != address(0), ErrorsLib.CONFIG_NOT_SET);
         AdaptiveCurveParams memory curveParams = curveConfig.getCurveParams();
 
-        // Safe "unchecked" cast because the utilization is smaller than 1 (scaled by WAD).
-        int256 utilization =
-            int256(market.totalSupplyAssets > 0 ? market.totalBorrowAssets.wDivDown(market.totalSupplyAssets) : 0);
-
-        int256 errNormFactor = utilization > curveParams.targetUtilization
-            ? WAD - curveParams.targetUtilization
-            : curveParams.targetUtilization;
-        int256 err = (utilization - curveParams.targetUtilization).wDivToZero(errNormFactor);
-
-        int256 startRateAtTarget = rateAtTarget[id];
-
-        int256 avgRateAtTarget;
-        int256 endRateAtTarget;
-
-        if (startRateAtTarget == 0) {
-            // First interaction.
-            avgRateAtTarget = curveParams.initialRateAtTarget;
-            endRateAtTarget = curveParams.initialRateAtTarget;
-        } else {
-            // The speed is assumed constant between two updates, but it is in fact not constant because of interest.
-            // So the rate is always underestimated.
-            int256 speed = curveParams.adjustmentSpeed.wMulToZero(err);
-            // market.lastUpdate != 0 because it is not the first interaction with this market.
-            // Safe "unchecked" cast because block.timestamp - market.lastUpdate <= block.timestamp <= type(int256).max.
-            int256 elapsed = int256(block.timestamp - market.lastUpdate);
-            int256 linearAdaptation = speed * elapsed;
-
-            if (linearAdaptation == 0) {
-                // If linearAdaptation == 0, avgRateAtTarget = endRateAtTarget = startRateAtTarget;
-                avgRateAtTarget = startRateAtTarget;
-                endRateAtTarget = startRateAtTarget;
-            } else {
-                // Formula of the average rate that should be returned to the core:
-                // avg = 1/T * ∫_0^T curve(startRateAtTarget*exp(speed*x), err) dx
-                // The integral is approximated with the trapezoidal rule:
-                // avg ~= 1/T * Σ_i=1^N [curve(f((i-1) * T/N), err) + curve(f(i * T/N), err)] / 2 * T/N
-                // Where f(x) = startRateAtTarget*exp(speed*x)
-                // avg ~= Σ_i=1^N [curve(f((i-1) * T/N), err) + curve(f(i * T/N), err)] / (2 * N)
-                // As curve is linear in its first argument:
-                // avg ~= curve([Σ_i=1^N [f((i-1) * T/N) + f(i * T/N)] / (2 * N), err)
-                // avg ~= curve([(f(0) + f(T))/2 + Σ_i=1^(N-1) f(i * T/N)] / N, err)
-                // avg ~= curve([(startRateAtTarget + endRateAtTarget)/2 + Σ_i=1^(N-1) f(i * T/N)] / N, err)
-                // With N = 2:
-                // avg ~= curve([(startRateAtTarget + endRateAtTarget)/2 + startRateAtTarget*exp(speed*T/2)] / 2, err)
-                // avg ~= curve([startRateAtTarget + endRateAtTarget + 2*startRateAtTarget*exp(speed*T/2)] / 4, err)
-                endRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation, curveParams);
-                int256 midRateAtTarget = _newRateAtTarget(startRateAtTarget, linearAdaptation / 2, curveParams);
-                avgRateAtTarget = (startRateAtTarget + endRateAtTarget + 2 * midRateAtTarget) / 4;
-            }
-        }
-
-        // Safe "unchecked" cast because avgRateAtTarget >= 0.
-        uint256 rate = uint256(_curve(avgRateAtTarget, err, curveParams.curveSteepness));
-
-        // The cap bounds only the reported rate. Adaptation is err-driven, not rate-driven, so `endRateAtTarget`
-        // stays untouched and the state machine is unchanged.
-        if (curveParams.maxBorrowRate != 0 && rate > curveParams.maxBorrowRate) rate = curveParams.maxBorrowRate;
-
-        return (rate, endRateAtTarget);
-    }
-
-    /// @dev Returns the rate for a given `_rateAtTarget` and an `err`.
-    /// The formula of the curve is the following:
-    /// r = ((1-1/C)*err + 1) * rateAtTarget if err < 0
-    ///     ((C-1)*err + 1) * rateAtTarget else.
-    function _curve(int256 _rateAtTarget, int256 err, int256 curveSteepness) private pure returns (int256) {
-        // Non negative because 1 - 1/C >= 0, C - 1 >= 0.
-        int256 coeff = err < 0 ? WAD - WAD.wDivToZero(curveSteepness) : curveSteepness - WAD;
-        // Non negative if _rateAtTarget >= 0 because if err < 0, coeff <= 1.
-        return (coeff.wMulToZero(err) + WAD).wMulToZero(_rateAtTarget);
-    }
-
-    /// @dev Returns the new rate at target, for a given `startRateAtTarget` and a given `linearAdaptation`.
-    /// The formula is: max(min(startRateAtTarget * exp(linearAdaptation), maxRateAtTarget), minRateAtTarget).
-    function _newRateAtTarget(int256 startRateAtTarget, int256 linearAdaptation, AdaptiveCurveParams memory curveParams)
-        private
-        pure
-        returns (int256)
-    {
-        // Non negative because minRateAtTarget > 0.
-        return startRateAtTarget.wMulToZero(ExpLib.wExp(linearAdaptation))
-            .bound(curveParams.minRateAtTarget, curveParams.maxRateAtTarget);
+        return AdaptiveCurveMathLib.computeBorrowRate(curveParams, rateAtTarget[id], market);
     }
 }
