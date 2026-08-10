@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.35;
+pragma solidity 0.8.36;
 
 import {LinearKinkIrm} from "../src/linear-kink-irm/LinearKinkIrm.sol";
 import {LinearKinkConfig} from "../src/linear-kink-irm/LinearKinkConfig.sol";
