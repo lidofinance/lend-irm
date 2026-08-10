@@ -39,12 +39,12 @@ jobs:
       - name: Install certora
         run: pip install certora-cli
 
-      # A single solc: the LidoLend core and the IRM sources both compile with 0.8.35.
-      - name: Install solc (0.8.35)
+      # A single solc: the LidoLend core and the IRM sources both compile with 0.8.36.
+      - name: Install solc (0.8.36)
         run: |
-          wget https://github.com/ethereum/solidity/releases/download/v0.8.35/solc-static-linux
+          wget https://github.com/ethereum/solidity/releases/download/v0.8.36/solc-static-linux
           chmod +x solc-static-linux
-          sudo mv solc-static-linux /usr/local/bin/solc-0.8.35
+          sudo mv solc-static-linux /usr/local/bin/solc-0.8.36
 
       - name: Verify ${{ matrix.conf }}
         run: certoraRun certora/confs/${{ matrix.conf }}.conf

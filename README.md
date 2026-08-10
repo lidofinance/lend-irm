@@ -23,7 +23,7 @@ Core interfaces and libraries resolve to the [lib/lido-lend](https://github.com/
 
 ## Getting started
 
-Requires [Foundry](https://book.getfoundry.sh/getting-started/installation) — `forge` auto-installs the pinned solc 0.8.35.
+Requires [Foundry](https://book.getfoundry.sh/getting-started/installation) — `forge` auto-installs the pinned solc 0.8.36.
 
 ```sh
 git clone --recurse-submodules git@github.com:lidofinance/lido-blue-irm.git
@@ -33,7 +33,7 @@ forge test
 
 Deep fuzz campaigns: `FOUNDRY_FUZZ_RUNS=65536 FOUNDRY_INVARIANT_RUNS=4096 forge test`. The coverage command, the exactness policy, and the property-to-test map are in [TEST_PLAN.md](TEST_PLAN.md).
 
-Formal verification with [Certora](https://docs.certora.com/): `certoraRun certora/confs/<Name>.conf` — the specs cover both IRMs and the router, see the "Tests and verification" section of [FORK_NOTES.md](FORK_NOTES.md). Runs need the Certora CLI, an access key, and `solc-0.8.35` on `PATH`.
+Formal verification with [Certora](https://docs.certora.com/): `certoraRun certora/confs/<Name>.conf` — the specs cover both IRMs and the router, see the "Tests and verification" section of [FORK_NOTES.md](FORK_NOTES.md). Runs need the Certora CLI, an access key, and `solc-0.8.36` on `PATH`.
 
 ## Documentation
 

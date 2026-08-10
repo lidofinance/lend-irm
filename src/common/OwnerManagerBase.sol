@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.35;
+pragma solidity 0.8.36;
 
 import {IOwnerManager} from "./IOwnerManager.sol";
 import {OwnerManagerErrors} from "./OwnerManagerErrors.sol";

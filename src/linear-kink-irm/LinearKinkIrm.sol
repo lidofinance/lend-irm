@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.35;
+pragma solidity 0.8.36;
 
 import {IIrm} from "../../lib/lido-lend/src/interfaces/IIrm.sol";
 import {ILinearKinkIrm} from "./interfaces/ILinearKinkIrm.sol";

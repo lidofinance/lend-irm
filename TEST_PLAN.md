@@ -126,7 +126,7 @@ Coverage is complete across executable `src/` code with `forge coverage --offlin
 
 ## 7. Formal verification (Certora)
 
-Specs live in `certora/{confs,specs}/`. All confs pin `solc-0.8.35` — the LidoLend core compiles with the same solc as the IRM sources, so `ExpectedMarketBalances.conf` links `lib/lido-lend/src/LidoLend.sol` directly.
+Specs live in `certora/{confs,specs}/`. All confs pin `solc-0.8.36` — the LidoLend core compiles with the same solc as the IRM sources, so `ExpectedMarketBalances.conf` links `lib/lido-lend/src/LidoLend.sol` directly.
 
 | Proves | Conf |
 |---|---|
