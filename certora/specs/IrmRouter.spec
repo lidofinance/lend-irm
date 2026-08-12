@@ -1,25 +1,22 @@
 // SPDX-License-Identifier: MIT
 
-// Verification of the fork-added IrmRouter: the single eternal IRM address behind which the owner routes each
+// Verification of the fork-added IrmRouter: the stable IRM address behind which the owner or manager routes each
 // market to a per-market implementation.
 //
-// The scene is the router plus one real implementation, LinearKinkIrm (stateless, which makes the forwarding
-// equivalence a clean same-inputs comparison). As in LinearKinkIrm.spec, rules never recompute the market id from
-// `marketParams`: where a rule must relate the routing table to the forwarded call, it routes `marketParams` through
-// the real `setMarketIrm` (the mapping slot the setter writes is exactly the slot `borrowRateView` reads back, both
-// on the contract's own id-derivation path). Where it must talk about the table across all markets, it reads storage
-// directly (`currentContract.marketIrm[id]`). Morpho is not in the scene, so the router's outbound Morpho calls are
-// summarized: `market(id)` returns an unconstrained Market struct and `accrueInterest` is NONDET. The setter's
-// `borrowRate` probe (live markets only) is summarized to NONDET as well -- it is a liveness filter, not part of
-// the routing state -- while the `borrowRateView` forward is dispatched to real scene code, which is exactly what
-// the forwarding rule is about.
+// The scene is the router plus one real implementation, LinearKinkIrm. Rules never recompute the market id from
+// `marketParams`: where a rule must relate the routing table to a forwarded call, it routes `marketParams` through
+// the real `setMarketIrm`; where it must quantify over the table, it reads `currentContract.marketIrm[id]` directly.
+// Morpho is outside the scene, so `market(id)` and `accrueInterest` are summarized. Every outbound implementation
+// `borrowRate` call is also summarized to an arbitrary successful return. That summary covers both the router's
+// normal state-changing forward and the live-market probe. Only the `borrowRateView` forward is dispatched to linked
+// implementation code, which is the forwarding equivalence proved below.
 
 using LinearKinkIrm as Kink;
 
 // Ghost observers over the summarized outside world: `ghostLastUpdate` steers what Morpho's `market(id)` reports,
-// and the two counters record every outbound call the router makes into Morpho and the implementation. They exist
-// for the call-occurrence rules (h) and (i) -- the router must not touch the implementation of a not-yet-created
-// market (a pre-creation probe once decayed a stateful model's seeded rate over the whole epoch).
+// while the two counters record calls to core accrual and implementation `borrowRate`. They exist for the
+// call-occurrence rules (h) and (i) -- the router must not call the implementation of a not-yet-created market
+// (a pre-creation probe once decayed a stateful model's seeded rate over the whole epoch).
 ghost uint128 ghostLastUpdate;
 ghost mathint accrueCalls;
 ghost mathint probeCalls;
@@ -53,9 +50,9 @@ methods {
     function _.market(IrmRouter.Id) external => nondetMarket() expect IrmRouter.Market;
     function _.accrueInterest(IrmRouter.MarketParams) external => countedAccrue() expect void;
 
-    // The setter's probe (live markets only) and the `borrowRate` forward return an arbitrary rate without
-    // reverting or touching state, and bump the probe counter. The `borrowRateView` forward is dispatched to the
-    // scene so `forwardingEquivalence` runs Kink's real code.
+    // Every implementation `borrowRate` call -- including the setter's live probe and the router's normal
+    // state-changing forward -- returns an arbitrary rate without reverting or touching implementation state and
+    // bumps the call counter. `borrowRateView` is dispatched so `forwardingEquivalence` executes Kink's real code.
     function _.borrowRate(IrmRouter.MarketParams, IrmRouter.Market) external => countedBorrowRate() expect uint256;
     function _.borrowRateView(IrmRouter.MarketParams, IrmRouter.Market) external => DISPATCHER(true);
 }
@@ -69,10 +66,11 @@ rule unroutedReverts(env e, IrmRouter.MarketParams marketParams, IrmRouter.Marke
     assert lastReverted;
 }
 
-// (a1) unroutedBorrowRateReverts: the state-changing path reverts for an unrouted market too, whoever calls --
-//      Morpho included. Together with (a0) this covers every pricing entry point.
+// (a1) unroutedBorrowRateReverts: after the Morpho caller passes the gate, the state-changing path still reverts for
+//      an unrouted market. Together with (a0) and borrowRateGate, this covers both pricing entry points and callers.
 rule unroutedBorrowRateReverts(env e, IrmRouter.MarketParams marketParams, IrmRouter.Market market) {
     require forall IrmRouter.Id id. currentContract.marketIrm[id] == 0;
+    require e.msg.sender == MORPHO();
 
     borrowRate@withrevert(e, marketParams, market);
     assert lastReverted;
@@ -87,13 +85,12 @@ rule borrowRateGate(env e, IrmRouter.MarketParams marketParams, IrmRouter.Market
     assert lastReverted;
 }
 
-// (b) marketIrmAccessControl: the routing table moves only through `setMarketIrm` called by the owner or the
-//     manager, the value
-//     written is never zero, and a market once routed is never routed back to zero. Direct storage access covers
-//     every id at once. The pre-state assumption excludes self-routing (`marketIrm[id]` holding the router itself),
-//     which is unreachable in a real deployment -- the setter's probe would call `borrowRate` on the router with
-//     `msg.sender == router != MORPHO`, so the gate rejects it -- and keeps the `borrowRateView` dispatch from
-//     inlining the router into itself.
+// (b) marketIrmAccessControl: the routing table moves only through `setMarketIrm` called by the owner or manager.
+//     A changed value is never zero, and a non-zero route is never cleared. Direct storage access covers every id.
+//
+//     The pre-state assumption excludes self-routing (`marketIrm[id]` holding the router itself) to prevent recursive
+//     `borrowRateView` dispatch from inlining the router into itself. Self-routing is not generally unreachable:
+//     pre-creation `setMarketIrm` can store it because that branch performs no implementation probe.
 rule marketIrmAccessControl(env e, method f, calldataarg args, IrmRouter.Id id) {
     require forall IrmRouter.Id anyId. currentContract.marketIrm[anyId] != currentContract;
 
@@ -111,9 +108,8 @@ rule marketIrmAccessControl(env e, method f, calldataarg args, IrmRouter.Id id) 
     assert irmBefore != 0 => irmAfter != 0;
 }
 
-// (c) initOneShot: `initialize` reverts once the contract is initialized -- covering both the implementation, locked
-//     by its constructor, and an already-initialized proxy -- and a successful call sets the flag and installs
-//     exactly the given roles.
+// (c) initOneShot: `initialize` reverts from any state whose initialized flag is already set, while a successful
+//     call sets the flag and installs exactly the given roles. Constructor locking is covered separately by Foundry.
 rule initOneShot(env e, address owner_, address manager_) {
     bool initializedBefore = isInitialized();
 
@@ -143,9 +139,9 @@ rule forwardingEquivalence(
     assert routed == direct;
 }
 
-// (h) uncreatedMarketRoutesUntouched: routing a market Morpho reports as not yet created (lastUpdate == 0) makes no
-//     call into Morpho or the implementation -- nothing to accrue, nothing to probe, and no premature write of a
-//     stateful model's per-market state. Regression guard for the pre-creation probe decay.
+// (h) uncreatedMarketRoutesUntouched: after querying Morpho for a market whose lastUpdate is zero, routing makes no
+//     accrual or implementation `borrowRate` call -- nothing to accrue, nothing to probe, and no premature write of
+//     a stateful model's per-market state. Regression guard for the pre-creation probe decay.
 rule uncreatedMarketRoutesUntouched(env e, IrmRouter.MarketParams marketParams, address irm) {
     require ghostLastUpdate == 0;
     require accrueCalls == 0 && probeCalls == 0;

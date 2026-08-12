@@ -1,79 +1,66 @@
-# Lido Lend IRM Fork Notes
+# Lido Lend IRM fork notes
 
-A fork of [Morpho Blue IRM](https://github.com/morpho-org/morpho-blue-irm) (Morpho Labs), extended for Lido Lend and imported as a submodule into `lido-lend-markets`, the repository hosting the market and controller scaffolding around the `lido-lend` core. `AdaptiveCurveIrm` keeps the upstream curve math but replaces its hardcoded constants with per-market parameters returned by an external config and adds an optional `maxBorrowRate` cap. The upstream `FixedRateIrm` is removed and replaced by a fork-only piecewise-linear `LinearKinkIrm` configured through the same contract-based ABI. Both IRMs expose `applyIrmConfig(MarketParams,address)`. A fork-only proxied `IrmRouter` fronts both models so a live market can be routed between implementations, and a permissionless `IrmConfigFactory` deploys or reuses the included immutable config implementations. `ExpLib`, `MathLib`, and `UtilsLib` keep upstream behavior.
+This document records the source delta from Morpho Blue IRM. Runtime behavior belongs in [SPECIFICATION.md](SPECIFICATION.md); verification coverage belongs in [TEST_PLAN.md](TEST_PLAN.md).
 
 ## Fork point
 
-- Upstream `morpho-org/morpho-blue-irm` @ `a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3` (upstream `main`, April 2026).
-- The upstream git history is preserved — the fork-point commit is an ancestor of this repo's `main` — so the change record is this document plus the native git diff against that commit. Inherited files are edited in place under their upstream names. `ExpLib` and `UtilsLib` are byte-identical to upstream, and `MathLib` differs only in one import path and its attribution header.
-- The core interfaces/libraries the IRMs import resolve to the `lib/lido-lend` submodule — `lidofinance/lido-lend`, the LidoLend core (Lido's fork of Morpho Blue, its `Morpho.sol` renamed to `LidoLend.sol` and bumped to `pragma 0.8.36`). The interfaces keep Morpho's names (`IMorpho`, `IIrm`, ...), and this document says "Morpho" for the core throughout.
+- Upstream repository: [`morpho-org/morpho-blue-irm`](https://github.com/morpho-org/morpho-blue-irm).
+- Upstream commit: [`a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3`](https://github.com/morpho-org/morpho-blue-irm/tree/a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3).
+- Core interfaces and libraries: the pinned [`lib/lido-lend`](lib/lido-lend) submodule.
 
-Reproduce the diff:
+Inherited interfaces retain Morpho names such as `IMorpho` and `IIrm`. In this repository, those interfaces target the LidoLend core.
+
+The fork-point commit is an ancestor of this repository's `main` branch, so the native diff below is the authoritative committed source change record. Reproduce it with:
 
 ```sh
-git diff a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3 HEAD -- src
+git diff a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3 HEAD -- src/
 ```
 
-Footprint:
+## Source footprint
 
-- **Modified** in place: `AdaptiveCurveIrm.sol`, `interfaces/IAdaptiveCurveIrm.sol`, `libraries/ErrorsLib.sol`, `libraries/periphery/AdaptiveCurveIrmLib.sol`, and `libraries/MathLib.sol` (import path and attribution header only).
-- **Added** (fork-only): `AdaptiveCurveConfig.sol`, `interfaces/IAdaptiveCurveConfig.sol`, and `interfaces/IAdaptiveCurveTypes.sol` — a constructor-validated immutable implementation of the config ABI consumed by `AdaptiveCurveIrm`, plus its types/interfaces. The IRM requires only ABI-decodable getter output; the authorized caller guarantees that the returned values are valid.
-- **Added** (fork-only): `libraries/AdaptiveCurveMathLib.sol` — the shared Adaptive rate computation used by `AdaptiveCurveIrm` and its periphery library.
-- **Removed**: the upstream `fixed-rate-irm/` module (`FixedRateIrm.sol`, `interfaces/IFixedRateIrm.sol`).
-- **Added** (fork-only): the `linear-kink-irm/` module — `LinearKinkIrm.sol`, immutable `LinearKinkConfig.sol`, their interfaces (`ILinearKinkIrm`, `ILinearKinkConfig`, `ILinearKinkTypes`), and the error library — a piecewise-linear kinked IRM with no adapting state. One instance serves many markets keyed by `Id`: `applyIrmConfig` reads an ABI-compatible config and copies its four `uint64` parameters into the packed `mapping(Id => LinearKinkParams)`. The config address is not stored or called while pricing. A market whose copied `optimalUtilization` is zero reverts `config not set`. The owner and manager are set at construction and remain rotatable; the IRM itself is standalone and non-proxied behind the router.
-- **Added** (fork-only): the `irm-config-factory/` module — `IrmConfigFactory.sol` and `interfaces/IIrmConfigFactory.sol` — a permissionless factory for the included immutable config implementations. Separate model-specific mappings index configs by `keccak256(abi.encode(params))`, while typed getters resolve addresses directly from parameter structs.
-- **Added** (fork-only): the `irm-router/` module — `IrmRouter.sol`, `interfaces/IIrmRouter.sol`, and `libraries/ErrorsLib.sol` — the proxied `IIrm` used as the market-facing address by markets adopting this package. It forwards `borrowRate` and `borrowRateView` to the per-market implementation in `mapping(Id => IIrm) marketIrm`, which the router owner or manager can replace through `setMarketIrm`.
-- **Added** (fork-only): the shared `common/` module — `OwnerManagerBase.sol` (abstract), `IOwnerManager.sol`, `OwnerManagerErrors.sol`, and `IConfigurableIrm.sol`. The base provides two-role authorization, and the shared config interface gives both IRM-specific interfaces the same `applyIrmConfig(MarketParams,address)` function and `IrmConfigApplied` event. Each IRM sets its initial roles in its constructor. The proxied router declares its own one-shot `initialize(owner, manager)` and implementation lock on top of the same base.
-- **Relocated**: `libraries/ConstantsLib.sol` moved to `test/`, where it supplies the upstream default parameter values used by tests.
-- No other `src/` files differ from the fork point.
+| Status | Paths | Change |
+| --- | --- | --- |
+| Modified | `src/adaptive-curve-irm/AdaptiveCurveIrm.sol`, its interface, error library, periphery library, and `MathLib` import/attribution | Replaces hardcoded constants with per-market config, adds authorization and an optional output cap. |
+| Added | `src/adaptive-curve-irm/AdaptiveCurveConfig.sol`, Adaptive config interfaces/types | Included immutable and constructor-validated config implementation. |
+| Added | `src/adaptive-curve-irm/libraries/AdaptiveCurveMathLib.sol` | Shared Adaptive rate calculation used by the contract and periphery. |
+| Removed | Upstream `src/fixed-rate-irm/` | The upstream fixed-rate module is not part of this fork. |
+| Added | `src/linear-kink-irm/` | Non-adapting piecewise-linear model, config, interfaces, and errors. |
+| Added | `src/irm-router/` | Proxied market-facing router with per-market implementation selection. |
+| Added | `src/irm-config-factory/` | Optional permissionless get-or-deploy factory for the included immutable configs, with per-model reuse by `keccak256(abi.encode(params))` and typed lookup by parameter struct. |
+| Added | `src/common/` | Shared owner/manager authorization plus the common `applyIrmConfig(MarketParams,address)` ABI and `IrmConfigApplied` event. |
+| Relocated | `src/adaptive-curve-irm/libraries/ConstantsLib.sol` | Upstream constants are retained only under `test/` as reference parameters. |
+| Unchanged | `src/adaptive-curve-irm/libraries/ExpLib.sol`, `src/adaptive-curve-irm/libraries/UtilsLib.sol` | Byte-identical to upstream at the fork point. |
 
-## Core changes
+No other `src/` files differ from the fork point. `MathLib.sol` changes only its import path and attribution header.
 
-The Adaptive curve formulas and adaptation are **unchanged from upstream**; they are parameterized per market instead of reading constants. `AdaptiveCurveIrm` and its periphery use the same `AdaptiveCurveMathLib` implementation. Differential fuzz tests compare it with `test/CurveRefHelper.sol`, which reuses the low-level arithmetic libraries but independently composes the curve, adaptation, and cap over the constructor-valid curve and adaptation ranges and the exercised cap range described in TEST_PLAN.md. Within Adaptive pricing, the functional additions are external parameter sourcing and the optional output cap; authorization, LinearKink, and routing changes are described separately below.
+## Storage and deployment
 
-- **Config contracts.** Upstream's six `ConstantsLib` curve constants, plus the new `maxBorrowRate`, become an `AdaptiveCurveParams` struct supplied through a config getter. The included immutable `AdaptiveCurveConfig` validates and stores those values in its constructor: `minRateAtTarget` must be positive, steepness is limited to 1–100, adjustment speed and `maxRateAtTarget` to 10,000/year, and any enabled `maxBorrowRate` cap to the maximum output at utilization up to 100% implied by those ceilings (`maxRateAtTargetLimit * maxSteepness`, approximately 100,000,000% APR). `LinearKinkConfig` independently bounds `baseRate + slope1 + slope2` at 8/year (800% APR). Neither concrete implementation is required by an IRM.
-- **Common config application.** Both IRMs inherit `IConfigurableIrm.applyIrmConfig(MarketParams,address)` and emit `IrmConfigApplied`. The owner or manager may call it. The implementations perform no separate bytecode, interface, or value validation; the required getter must return ABI-decodable parameters, and the caller guarantees that those parameters are valid.
-- **Adaptive live binding.** `AdaptiveCurveIrm.applyIrmConfig` reads `getCurveParams()` for the clamp, stores the exact `config` address in `marketCurveConfig[id]`, and reads it again during every rate calculation. The selected config must return valid parameters on every read. Reconfiguration clamps a non-zero stored `rateAtTarget` into the returned band and preserves the zero first-interaction sentinel. If a mutable config changes its returned band without another `applyIrmConfig` call, pricing sees the new values but the function's eager clamp does not run.
-- **LinearKink snapshot.** `LinearKinkIrm.applyIrmConfig` reads `getKinkParams()` and copies the values into packed `marketKinkParams[id]`. The `LinearKinkConfig` constructor validates its parameters directly, including its 8/year (800% APR) peak ceiling. The IRM neither stores the `config` address nor calls it while pricing; copied values are authoritative and reconfiguration overwrites the snapshot.
-- **Config deployment is separate from the IRMs.** `IrmConfigFactory` is permissionless and keeps private model-specific `paramsHash => config` mappings. Each get-or-deploy function computes `keccak256(abi.encode(params))`, returns the mapped address on a cache hit, or deploys the corresponding concrete config and stores it on a miss. `getAdaptiveCurveConfig(params)` and `getLinearKinkConfig(params)` expose read-only parameter-based lookup without requiring callers to reproduce the hash. Validation remains exclusively in the config constructors. The IRMs do not reference the factory or its mappings and continue to accept any ABI-compatible config selected by an authorized caller.
-- **Owner and manager in storage.** `owner` rotates itself (`transferOwnership`) and the `manager` (`setManager`) — both owner-only, both rejecting the zero address. Either role may call `applyIrmConfig`; the manager cannot rotate roles. Both initial roles are set by the constructor.
-- **Optional `maxBorrowRate` cap.** A non-zero value is a hard ceiling on the charged Adaptive rate; zero disables the clamp. `AdaptiveCurveConfig` limits the cap to the maximum output at utilization up to 100% implied by its parameter ceilings. `AdaptiveCurveIrm` does not enforce that constructor limit. The cap changes only the returned rate, not the adapting `rateAtTarget`.
-- **Standalone IRMs.** The IRMs are non-proxied contracts with roles set at construction: `AdaptiveCurveIrm(router, owner, manager)` accepts state-changing `borrowRate` only from `router`, while `LinearKinkIrm(owner, manager)` has no caller gate on its view-only pricing functions. Neither contract has an initializer or implementation lock. Storage starts with `owner` (slot 0) and `manager` (slot 1), followed by `rateAtTarget` (slot 2) and `marketCurveConfig` (slot 3) on Adaptive, or `marketKinkParams` (slot 2) on LinearKink.
-- **Market routing.** Markets using this package are created with `IrmRouter` as their immutable `irm`. The router forwards its Morpho-gated `borrowRate` and public `borrowRateView` to `marketIrm[id]`, reverting `irm not set` when the pointer is zero. Owner or manager may call `setMarketIrm`; it rejects a zero implementation and market params whose `irm` is not the router. The setter first reads `market(id)` from Morpho. For a live market, it then calls `accrueInterest`, reloads the market, probes the new implementation through `borrowRate`, and stores the pointer only if the probe succeeds. For an uncreated market, it stores the pointer without calling `accrueInterest` or the implementation; `createMarket` later performs the first pricing call and reverts atomically if routing or configuration is unusable.
-- **Router proxy.** `IrmRouter` uses the ERC-7201 namespace `lido.lend.storage.IrmRouter`: `owner` is at the namespace base, `manager` and `isInitialized` share base + 1, and `marketIrm` is at base + 2. The implementation constructor locks only the implementation's own storage; a proxy must call the one-shot `initialize(owner, manager)` before it is exposed. A storage-compatible proxy upgrade preserves these fields. The proxy admin can replace the routing logic and write storage through an upgrade. The supplied IRM implementations remain non-upgradeable; changing their rate logic requires a new implementation and a market migration. The proxy and deployment scripts live in the product repository.
+- `AdaptiveCurveIrm` is direct and non-proxied: owner slot 0, manager slot 1, `rateAtTarget` slot 2, `marketCurveConfig` slot 3.
+- `LinearKinkIrm` is direct and non-proxied: owner slot 0, manager slot 1, `marketKinkParams` slot 2.
+- `IrmRouter` is proxied and uses ERC-7201 namespace `lido.lend.storage.IrmRouter`: owner at the namespace base, manager and `isInitialized` at base + 1, and `marketIrm` at base + 2.
+- Included config contracts are immutable. The factory is direct and permissionless.
 
-## Interfaces and libraries
+Deployment ABIs are `IrmRouter(core)` plus atomic proxy initialization through `initialize(owner, manager)`, `AdaptiveCurveIrm(router, owner, manager)`, and `LinearKinkIrm(owner, manager)`. The core, router, and role addresses must be non-zero.
 
-- `IAdaptiveCurveTypes.sol` (new): the shared top-level `AdaptiveCurveParams` struct (the seven curve fields), decoupled from any contract.
-- `IAdaptiveCurveConfig.sol` (new): the per-market config surface — `getCurveParams()` and the per-field getters (`CURVE_STEEPNESS()` … `MAX_BORROW_RATE()`). It inherits the `AdaptiveCurveParams` type from `IAdaptiveCurveTypes`.
-- `ILinearKinkConfig.sol` (new): the kink-config ABI — `getKinkParams()` plus the four per-field getters exposed by `LinearKinkConfig`.
-- `IIrmConfigFactory.sol` (new, `irm-config-factory/`): the two permissionless get-or-deploy functions, read-only parameter-based config getters, and deployment events.
-- `IConfigurableIrm.sol` (new, `common/`): the shared `applyIrmConfig(MarketParams,address)` surface and `IrmConfigApplied` event. Both IRM-specific interfaces inherit it; there is deliberately no shared getter.
-- `IOwnerManager.sol` (new, `common/`): the two-role surface — `owner()`/`manager()`, `transferOwnership(address)`, `setManager(address)`, with `OwnershipTransferred`/`ManagerSet` events. There is no `initialize` here — a standalone contract sets the roles in its own constructor.
-- `IIrmRouter.sol` (new, `irm-router/`): the router surface — `MORPHO()`, `marketIrm(Id)`, `setMarketIrm(MarketParams, IIrm)` (with the `MarketIrmSet` event), plus `isInitialized()` and the one-shot `initialize(owner, manager)`, inheriting `IIrm` and `IOwnerManager`.
-- `IAdaptiveCurveIrm.sol`: renames `MORPHO()` to `ROUTER()` — the trusted caller is the router, not the core — and adds `marketCurveConfig(Id)`. It inherits `IIrm`, `IOwnerManager`, and the common config surface; `rateAtTarget(Id)` is unchanged.
-- `ILinearKinkIrm.sol`: exposes the copied `marketKinkParams(Id)`, inheriting the same `IIrm`, role, and common config surfaces. The `LinearKinkConfig` constructor's 800%/year peak ceiling is deliberately not part of the IRM ABI.
-- The included config implementations validate their constructor inputs before storing them. Independently, the IRMs do not validate getter returns; the caller guarantees their validity on every Adaptive read and when `applyIrmConfig` snapshots them for LinearKink.
-- `ErrorsLib.sol`: Adaptive renames `NOT_MORPHO` to `NOT_ROUTER` and adds `CONFIG_NOT_SET` plus its config-constructor validation errors. LinearKink has its own unset and config-constructor validation errors. `ZERO_ADDRESS`, `NOT_OWNER`, and `NOT_AUTHORIZED` live in the shared `OwnerManagerErrors.sol`; the router keeps its own routing errors.
-- `AdaptiveCurveMathLib.sol` (new): the single implementation of the Adaptive utilization error, adaptation, trapezoidal average, curve, and `maxBorrowRate` output cap used by both the IRM and the periphery.
-- `AdaptiveCurveIrmLib.sol` (periphery): resolves the market's config from the IRM (`marketCurveConfig(id)`), reads it live instead of using `ConstantsLib`, and passes the parameters and stored `rateAtTarget` to `AdaptiveCurveMathLib`. It reverts `config not set` when no config is selected. Its public surface is unchanged, but results are now market-specific.
-- `ConstantsLib.sol`: moved from `src/` to `test/`, where it is the canonical default config the tests build on.
+The [Lido Lend Markets](https://github.com/lidofinance/lido-lend-markets) product repository owns the router proxy, deployment scripts, and concrete role assignments.
 
-## Compatibility
+## Compatibility boundary
 
-- **ABI-compatible at the core call site:** the `IIrm` function signatures are unchanged, so the core can call the router without an ABI change. Integrators must account for routing, per-market configuration, new unset-state reverts, and Adaptive's router caller gate.
-- **Not drop-in at deployment:** the IRM constructors now take the roles — `AdaptiveCurveIrm(router, owner, manager)` with `router` the only address whose `borrowRate` calls are accepted, and `LinearKinkIrm(owner, manager)` — and markets are created with the proxied `IrmRouter` in front of the IRMs rather than with an IRM address directly. The proxy must be initialized atomically before exposure, and a config returning valid parameters must be supplied to the selected IRM; the optional permissionless factory can return an existing included config for a parameter set or deploy one if absent.
-- **One config-application ABI, distinct semantics:** `applyIrmConfig(MarketParams,address)` re-points Adaptive to a live config whose getter must return valid parameters while selected and copies the returned LinearKink parameters into packed storage. Either can move the charged rate discontinuously on the next interaction. Rotating `owner` or `manager` remains a `transferOwnership` / `setManager` call.
-- **Bumped:** implementation contracts pin Solidity 0.8.36 (`AdaptiveCurveIrm` used 0.8.19 upstream), and core imports resolve to `lib/lido-lend`. Interfaces and libraries retain compatible pragma ranges. **Unchanged:** MIT, `evm_version = "paris"`.
+- The core-facing `IIrm` selectors are unchanged, but deployment and operating semantics are not drop-in.
+- Adaptive formulas are upstream-compatible when supplied the upstream parameters and with `maxBorrowRate == 0`.
+- Adaptive deployment adds the trusted router and role constructor arguments, and every market needs a config.
+- A router-fronted market must set `MarketParams.irm` to the router. The selected model address is stored only in the router.
+- The optional factory is a deployment cache, not an allowlist or source of trusted config addresses. The IRMs accept any ABI-compatible config selected by an authorized caller, who is responsible for its returned values; Adaptive reads it on every pricing call, while LinearKink trusts it only during application.
+- The repository's default Foundry profile pins Solidity 0.8.36, targets the Paris EVM, enables the optimizer with 200 runs, and disables via-IR. Upstream `AdaptiveCurveIrm` pinned Solidity 0.8.19; imported dependencies retain compatible pragma ranges.
 
-## Tests and verification
+## Tests and formal verification
 
-- Foundry: applicable upstream Adaptive and utility tests are retained and adapted to apply configs through `applyIrmConfig`; the FixedRate tests were removed with that module. Fork tests cover the identical function selector, owner/manager authorization, failed getter calls for the zero address, an EOA, a formerly deployed address whose code was removed, and tested wrong-interface contracts, the deliberate absence of returned-value validation in the IRMs, Adaptive live binding and reconfiguration clamping, LinearKink config construction and snapshot semantics, permissionless config deployment and reuse, and the rate, cap, ownership, periphery, router, and migration properties. See `TEST_PLAN.md` for the full mapping.
-- Deep fuzz runs use `FOUNDRY_FUZZ_RUNS=65536 FOUNDRY_INVARIANT_RUNS=4096 forge test`. The inherited `vm.assume`-heavy market filters were replaced with `bound`-based domain squeezing (`_boundMarket`) to stay within Foundry's default rejection cap.
-- Certora (`certora/{confs,specs}/`):
-  - `BorrowRateView.conf` proves the periphery rate equal to the direct Adaptive contract for values and modeled reverts when both getter calls use the same successful ghost-backed parameter return. `ExpectedMarketBalances.conf` proves the corresponding direct-IRM balance-library equivalence under its dispatched external-state model.
-  - `MaxBorrowRate.conf` proves that both Adaptive pricing functions respect a non-zero cap when `totalBorrowAssets <= totalSupplyAssets`.
-  - `RateAtTargetBand.conf` proves, for a linked immutable config satisfying the spec's stated preconditions, that a `borrowRate` step preserves the rate band from a zero-or-in-band prestate and that `applyIrmConfig` clamps non-zero state while preserving the zero sentinel.
-  - `LinearKinkIrm.conf` (spec `certora/specs/LinearKinkIrm.spec`, production IRM plus a linked config, no harness) proves under the `LinearKinkConfig` constructor assumptions that the config-application path never charges above the copied curve's peak or that config's 800%/year ceiling, proves the same ceiling conditionally for storage satisfying the peak assumption, and also proves monotonicity, statelessness, the unset revert, successful config application, and linked-config endpoint rates. It does not claim that `applyIrmConfig` validates arbitrary returned values.
-  - `IrmRouter.conf` (spec `certora/specs/IrmRouter.spec`) proves view forwarding to the linked LinearKink implementation, the Morpho gate on `borrowRate`, authorized non-zero routing-table changes under the spec's no-self-route precondition, both pricing reverts when the modeled routing table is entirely zero, one-shot initialization, no `accrueInterest` or implementation `borrowRate` call during an uncreated route, and exactly one of each during a successful live route.
-  - `MaxBorrowRate` and `RateAtTargetBand` read curve params from linked config getters; `LinearKinkIrm` snapshots parameters returned by a linked config getter; `BorrowRateView` and `ExpectedMarketBalances` summarize `getCurveParams()` with ghost-backed values so both sides of each equivalence see identical params. All confs pin `solc-0.8.36`.
+[TEST_PLAN.md](TEST_PLAN.md) maps Foundry coverage and Certora's modeled properties, assumptions, and proof-evidence boundary.
+
+## Audit boundary
+
+The `audits/` directory contains reports with different historical scopes. It includes reports for removed or unrelated components, including FixedRateIrm and vault or adapter code. Review each report's audited commit and scope before applying it to this source tree. The presence of a report does not imply coverage of the router, LinearKink, config contracts, factory, or other Lido changes.
+
+## License
+
+Local IRM source uses MIT. Imported LidoLend interfaces and libraries retain `GPL-2.0-or-later` SPDX identifiers.
