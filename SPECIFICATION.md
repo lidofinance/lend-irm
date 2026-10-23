@@ -123,7 +123,7 @@ The permissionless config factory does not apply a config, set a route, or creat
 
 ### Pricing
 
-`borrowRate(marketParams, market)` first checks that its caller is `MORPHO`, then loads `marketIrm[id]` and calls that implementation's `borrowRate`. `borrowRateView` has no caller gate and forwards to the implementation's view function. After the core-only caller check passes, both paths revert with `irm not set` when the route is zero.
+`borrowRate(marketParams, market)` first checks that its caller is `MORPHO`, then loads `marketIrm[id]` and calls that implementation's `borrowRate`. `borrowRateView` has no caller gate and forwards to the implementation's view function. After the core-only caller check passes, both paths revert with `IRM_NOT_SET` when the route is zero.
 
 The router calls implementations with a normal external call, not `delegatecall`. Each implementation therefore owns its own per-market state.
 
@@ -396,9 +396,9 @@ The router proxy preserves its namespaced storage across a compatible upgrade. `
 
 ## References
 
-- [Morpho Blue IRM at the fork point](https://github.com/morpho-org/morpho-blue-irm/tree/a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3) for inherited Adaptive math.
+- [Morpho Blue IRMs at the fork point](https://github.com/morpho-org/morpho-blue-irm/tree/a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3) for inherited Adaptive math.
 - [FORK_NOTES.md](FORK_NOTES.md) for the source delta.
 - [TEST_PLAN.md](TEST_PLAN.md) for Foundry and Certora coverage.
 - [`IConfigurableIrm.sol`](src/common/IConfigurableIrm.sol) for the shared config-application ABI.
 - [`IrmRouter.sol`](src/irm-router/IrmRouter.sol), [`AdaptiveCurveIrm.sol`](src/adaptive-curve-irm/AdaptiveCurveIrm.sol), [`AdaptiveCurveMathLib.sol`](src/adaptive-curve-irm/libraries/AdaptiveCurveMathLib.sol), [`ExpLib.sol`](src/adaptive-curve-irm/libraries/ExpLib.sol), [`LinearKinkIrm.sol`](src/linear-kink-irm/LinearKinkIrm.sol), and [`IrmConfigFactory.sol`](src/irm-config-factory/IrmConfigFactory.sol) for the implementation.
-- [Lido Lend Markets](https://github.com/lidofinance/lido-lend-markets) for proxy deployment and concrete role holders.
+- [Lido Lend Markets](https://github.com/lidofinance/lend-markets) for proxy deployment and concrete role holders.

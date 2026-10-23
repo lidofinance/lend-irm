@@ -6,4 +6,4 @@
 	url = https://github.com/transmissions11/solmate
 [submodule "lib/lido-lend"]
 	path = lib/lido-lend
-	url = git@github.com:lidofinance/lido-lend
+	url = https://github.com/lidofinance/lend

@@ -2,30 +2,17 @@
 cache/
 out/
 
-# Ignores development broadcast logs
-!/broadcast
-/broadcast/*/31337/
-/broadcast/**/dry-run/
-
 # Dotenv file
 .env
 
-# Node.js
-node_modules/
-
-# Hardhat
-/types
-/cache_hardhat
-/artifacts
-
 # Certora
 .certora*/
-
-# Claude
-.claude/
-.last_confs/
 .certora_metadata.json
 .certora_verify.json
+.last_confs/
 certora_debug_log.txt
 resource_errors.json
 emv-*/
+
+# Claude
+.claude/

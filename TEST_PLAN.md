@@ -1,4 +1,4 @@
-# Lido Lend IRM — Test Plan
+# Lido Lend IRM test plan
 
 This document maps the behavior in [SPECIFICATION.md](SPECIFICATION.md) to Foundry tests and Certora configurations. The main changes are per-market Adaptive configs, owner/manager authorization, an optional Adaptive output cap, reconfiguration, LinearKinkIrm, IrmRouter, and the optional config factory.
 

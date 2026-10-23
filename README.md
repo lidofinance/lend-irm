@@ -1,6 +1,6 @@
-# Lido Lend interest-rate models
+# Lido Lend IRMs
 
-This repository is a fork of [Morpho Blue IRM](https://github.com/morpho-org/morpho-blue-irm) that provides two interest-rate models (IRMs), a router that lets each live market change its selected implementation, and an optional factory for immutable parameter contracts. [FORK_NOTES.md](FORK_NOTES.md) records the exact fork point and source delta.
+This repository is a fork of [Morpho Blue IRMs](https://github.com/morpho-org/morpho-blue-irm) that provides two interest-rate models (IRMs), a router that lets each live market change its selected implementation, and an optional factory for immutable parameter contracts. [FORK_NOTES.md](FORK_NOTES.md) records the exact fork point and source delta.
 
 A LidoLend market stores its IRM address permanently in `MarketParams`. Markets using this package store the `IrmRouter` address there. The router keeps that market-facing address stable and selects the current model for each market. [SPECIFICATION.md](SPECIFICATION.md#runtime-topology) shows the complete runtime topology.
 
@@ -47,14 +47,15 @@ For a live market, `setMarketIrm` asks the core to accrue interest, probes the n
 ## Start here
 
 - [SPECIFICATION.md](SPECIFICATION.md) defines market identity, setup, routing, exact model math, reconfiguration, storage, and trust assumptions.
-- [FORK_NOTES.md](FORK_NOTES.md) records the fork point and source delta from Morpho Blue IRM.
+- [FORK_NOTES.md](FORK_NOTES.md) records the fork point and source delta from Morpho Blue IRMs.
 - [TEST_PLAN.md](TEST_PLAN.md) maps requirements to Foundry and Certora checks.
+- [SECURITY.md](SECURITY.md) gives the private vulnerability-reporting route.
 
-The core interfaces come from the pinned [`lib/lido-lend`](lib/lido-lend) submodule. The [`lido-lend-markets`](https://github.com/lidofinance/lido-lend-markets) product repository deploys the router proxy and assigns operational roles.
+The core interfaces come from [LidoLend](https://github.com/lidofinance/lend), pinned as the `lib/lido-lend` submodule. The [`lend-markets`](https://github.com/lidofinance/lend-markets) product repository deploys the router proxy and assigns operational roles.
 
 ## Development
 
-The repository uses [Foundry](https://book.getfoundry.sh/getting-started/installation) with Solidity 0.8.36 pinned in [foundry.toml](foundry.toml).
+The repository uses [Foundry](https://www.getfoundry.sh/introduction/installation) with Solidity 0.8.36 pinned in [foundry.toml](foundry.toml).
 
 From a checkout, initialize the submodules and run the suite:
 
@@ -67,10 +68,12 @@ For larger local campaigns: `FOUNDRY_FUZZ_RUNS=65536 FOUNDRY_INVARIANT_RUNS=4096
 
 Run a proof with `certoraRun certora/confs/<Name>.conf`. Certora runs require the Certora CLI, an access key, and the compiler selected by each configuration. [TEST_PLAN.md](TEST_PLAN.md#7-formal-verification) records the modeled properties and proof-evidence boundary.
 
-## Audits and security
+## Audits
 
-Audit reports have historical scopes. Read each report and the [audit boundary](FORK_NOTES.md#audit-boundary) before applying it to the current source. Follow [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+Audit reports for Morpho Blue IRMs are kept in the [upstream repository at the fork-point commit](https://github.com/morpho-org/morpho-blue-irm/tree/a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3/audits). Each report covers only the commit and scope named in that report. None of them covers later upstream changes or the Lido fork changes.
+
+Lido publishes its own audit reports in the [lidofinance/audits](https://github.com/lidofinance/audits) repository.
 
 ## License
 
-The local IRM sources use MIT; see [LICENSE](LICENSE). Imported LidoLend interfaces and libraries keep their own `GPL-2.0-or-later` SPDX licenses.
+The local IRM sources use `MIT`. Imported LidoLend interfaces and libraries keep their own `GPL-2.0-or-later` SPDX headers. See [LICENSE](LICENSE) for the repository license terms.
