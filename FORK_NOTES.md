@@ -1,12 +1,12 @@
 # Lido Lend IRM fork notes
 
-This document records the source delta from Morpho Blue IRM. Runtime behavior belongs in [SPECIFICATION.md](SPECIFICATION.md); verification coverage belongs in [TEST_PLAN.md](TEST_PLAN.md).
+This document records the source delta from Morpho Blue IRMs. Runtime behavior belongs in [SPECIFICATION.md](SPECIFICATION.md); verification coverage belongs in [TEST_PLAN.md](TEST_PLAN.md).
 
 ## Fork point
 
 - Upstream repository: [`morpho-org/morpho-blue-irm`](https://github.com/morpho-org/morpho-blue-irm).
 - Upstream commit: [`a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3`](https://github.com/morpho-org/morpho-blue-irm/tree/a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3).
-- Core interfaces and libraries: the pinned [`lib/lido-lend`](lib/lido-lend) submodule.
+- Core interfaces and libraries: [LidoLend](https://github.com/lidofinance/lend), pinned as the `lib/lido-lend` submodule.
 
 Inherited interfaces retain Morpho names such as `IMorpho` and `IIrm`. In this repository, those interfaces target the LidoLend core.
 
@@ -42,7 +42,7 @@ No other `src/` files differ from the fork point. `MathLib.sol` changes only its
 
 Deployment ABIs are `IrmRouter(core)` plus atomic proxy initialization through `initialize(owner, manager)`, `AdaptiveCurveIrm(router, owner, manager)`, and `LinearKinkIrm(owner, manager)`. The core, router, and role addresses must be non-zero.
 
-The [Lido Lend Markets](https://github.com/lidofinance/lido-lend-markets) product repository owns the router proxy, deployment scripts, and concrete role assignments.
+The [Lido Lend Markets](https://github.com/lidofinance/lend-markets) product repository owns the router proxy, deployment scripts, and concrete role assignments.
 
 ## Compatibility boundary
 
@@ -51,7 +51,7 @@ The [Lido Lend Markets](https://github.com/lidofinance/lido-lend-markets) produc
 - Adaptive deployment adds the trusted router and role constructor arguments, and every market needs a config.
 - A router-fronted market must set `MarketParams.irm` to the router. The selected model address is stored only in the router.
 - The optional factory is a deployment cache, not an allowlist or source of trusted config addresses. The IRMs accept any ABI-compatible config selected by an authorized caller, who is responsible for its returned values; Adaptive reads it on every pricing call, while LinearKink trusts it only during application.
-- The repository's default Foundry profile pins Solidity 0.8.36, targets the Paris EVM, enables the optimizer with 200 runs, and disables via-IR. Upstream `AdaptiveCurveIrm` pinned Solidity 0.8.19; imported dependencies retain compatible pragma ranges.
+- The repository's default Foundry profile pins Solidity 0.8.36, targets the Paris EVM, enables the optimizer with 200 runs, and disables via-IR. Upstream builds with via-IR and 999999 optimizer runs, and its `AdaptiveCurveIrm` pinned Solidity 0.8.19. Imported dependencies retain compatible pragma ranges.
 
 ## Tests and formal verification
 
@@ -59,7 +59,7 @@ The [Lido Lend Markets](https://github.com/lidofinance/lido-lend-markets) produc
 
 ## Audit boundary
 
-The `audits/` directory contains reports with different historical scopes. It includes reports for removed or unrelated components, including FixedRateIrm and vault or adapter code. Review each report's audited commit and scope before applying it to this source tree. The presence of a report does not imply coverage of the router, LinearKink, config contracts, factory, or other Lido changes.
+Upstream audit reports are not copied into this repository. They stay in the [Morpho Blue IRMs repository at the fork point](https://github.com/morpho-org/morpho-blue-irm/tree/a1a87fd5a7ee13873ea9d2bbd87e9c7b2cdbbef3/audits), and each covers only the commit and scope named in it. Some cover components this fork removed or never included, such as FixedRateIrm and vault adapter code. None covers the router, LinearKink, config contracts, factory, or other Lido changes.
 
 ## License
 
