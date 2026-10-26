@@ -3,6 +3,14 @@ src = "src"
 out = "out"
 test = "test"
 libs = ["lib"]
+# Auto-detection can resolve ds-test/ to lib/solmate's older copy, which lacks assertNotEq.
+auto_detect_remappings = false
+remappings = [
+    "ds-test/=lib/forge-std/lib/ds-test/src/",
+    "forge-std/=lib/forge-std/src/",
+    "lido-lend/=lib/lido-lend/",
+    "solmate/=lib/solmate/src/",
+]
 names = true
 sizes = true
 via_ir = false
