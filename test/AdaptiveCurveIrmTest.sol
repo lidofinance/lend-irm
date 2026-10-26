@@ -644,6 +644,12 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
         Market memory market;
         market.totalSupplyAssets = 1 ether;
         market.totalBorrowAssets = 0.98 ether;
+
+        // A zero rateAtTarget means "never priced": computeBorrowRate stamps in initialRateAtTarget and ignores
+        // elapsed time. Price each IRM once to leave that branch, so the post-warp call adapts instead of re-seeding.
+        irm.borrowRate(marketParams, market);
+        capped.borrowRate(marketParams, market);
+
         market.lastUpdate = uint128(block.timestamp);
         vm.warp(block.timestamp + 5 days);
 
@@ -656,6 +662,9 @@ contract AdaptiveCurveIrmTest is Test, CurveRefHelper {
             capped.rateAtTarget(marketParams.id()),
             irm.rateAtTarget(marketParams.id()),
             "rateAtTarget adapts identically; the cap bounds only the charged rate"
+        );
+        assertTrue(
+            irm.rateAtTarget(marketParams.id()) != ConstantsLib.INITIAL_RATE_AT_TARGET, "the anchor actually adapted"
         );
     }
 
