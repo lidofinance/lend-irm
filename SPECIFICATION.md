@@ -229,6 +229,9 @@ The included `AdaptiveCurveConfig` validates its values in the constructor:
 
 The curve and adaptation bounds protect the included implementation's arithmetic for protocol-reachable utilization. The `maxBorrowRate` ceiling rejects a cap above the maximum output at utilization no greater than `WAD` under the global parameter limits and catches common unit errors. These bounds do not determine whether a parameter set is economically suitable. The IRM itself does not enforce them.
 
+> [!WARNING]
+> **An accepted curve can stop the core's accrual.** The config bounds do not cap the interest the core books, so a curve near its steepness and target-rate ceilings can overflow the core's `uint128` totals, and every accruing action, withdrawals included, then reverts. The manager can still recover the market with a lower-rate config, because `applyIrmConfig` does not accrue, and the next accrual books the stuck period at the new rate. Choosing a safe config is up to the manager.
+
 ### Adaptive rate calculation
 
 Unsigned utilization division rounds down. Signed WAD operations use:
@@ -295,7 +298,7 @@ averageRateAtTarget = (r0 + end + 2 * mid) / 4
 endRateAtTarget     = end
 ```
 
-`wExp` is the WAD-scaled approximation and saturation function defined by `ExpLib.wExp`.
+`wExp` is the WAD-scaled approximation and saturation function defined by `ExpLib.wExp`. It splits `x` into `q * ln 2 + rem` with integer `q` and `|rem| <= ln 2 / 2`, and returns `2^q * (1 + rem + rem^2 / 2)`. Below its saturation bound of about 93.86, its relative error is therefore between about -0.54% and +0.90%. For large negative `x`, the final shift rounds the result toward zero, and the error leaves this range. For `|x| < ln 2 / 2`, `q` is zero, so beyond one-wei truncation the result overstates `exp(x)` when `x` is negative and understates it when `x` is positive. Below the saturation bound, where `x` crosses an odd multiple of `ln 2 / 2`, the result jumps by about 1.4%, up as `x` increases and down as `x` decreases.
 
 The calculation holds the pre-accrual utilization error `e` constant for the complete interval `T`. Interest can raise utilization during that interval, so the fixed-error approximation can understate the rate. The three-point expression is the implementation's trapezoidal approximation of the interval-average target rate. The raw borrow rate is `curve(averageRateAtTarget, e)`, not `curve(endRateAtTarget, e)`.
 
@@ -309,6 +312,9 @@ returnedRate = min(rawBorrowRate, maxBorrowRate)                  otherwise
 The cap does not change `endRateAtTarget` in the current call. When it binds, it lowers accrued interest; this can change later utilization and future adaptation.
 
 `borrowRateView` performs this calculation without saving the end value and without emitting an event. `borrowRate` accepts only `ROUTER`, stores `endRateAtTarget`, emits `BorrowRateUpdate(id, returnedRate, endRateAtTarget)`, and returns the same calculated rate.
+
+> [!NOTE]
+> **The rate and the interest depend on when accruals happen.** Each accrual updates the stored `rateAtTarget` with one `wExp` step, even with no borrows, and each step carries its own approximation error, so anyone who splits an interval into more accruals changes the rate later borrowers inherit. Below target utilization, `wExp` also steps down at the jumps described above, so accruing one second later can book slightly less interest for the whole interval.
 
 ### Adaptive reconfiguration
 
